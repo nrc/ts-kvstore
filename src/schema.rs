@@ -1,6 +1,6 @@
 #![allow(private_interfaces, private_bounds, unused_macros)]
 
-use std::{any::Any, hash::Hash};
+use std::{any::Any, hash::Hash, sync::Arc};
 
 pub trait DataDesc: Sized {
     type Key: Hash + Eq;
@@ -16,6 +16,19 @@ pub trait Singleton: DataDesc {
     fn to_value(value: Self::ArgValue) -> crate::SinValue;
 }
 
+pub trait ArcSingleton: Singleton {
+    fn from_value_arc(value: &crate::SinValue) -> Arc<Self::Value> {
+        match value {
+            crate::SinValue::Arc(a) => a.clone().downcast().unwrap(),
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub trait MutSingleton: Singleton {
+    fn from_value_mut(value: &mut crate::SinValue) -> &mut Self::Value;
+}
+
 pub trait TableDesc<Storage: GeneratedStorage>: DataDesc {
     const NAME: &'static str;
 
@@ -29,14 +42,33 @@ pub(crate) trait GeneratedStorage: Default {}
 #[macro_export]
 macro_rules! singleton {
     ($name: ident ($key: expr, $key_ty: ty, u64)) => {
-        singleton!($name($key, $key_ty, u64, u64, U64))
+        singleton!($name($key, $key_ty, u64, u64, U64));
+
+        impl MutSingleton for $name {
+            fn from_value_mut(value: &mut $crate::SinValue) -> &mut Self::Value {
+                match value {
+                    match_helper_lhs!(U64, v) => match_helper_rhs_mut!(U64, v),
+                    _ => unreachable!(),
+                }
+            }
+        }
     };
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Box)) => {
-        singleton!($name($key, $key_ty, $value_ty, $value_ty, Box))
+        singleton!($name($key, $key_ty, $value_ty, $value_ty, Box));
+
+        impl MutSingleton for $name {
+            fn from_value_mut(value: &mut $crate::SinValue) -> &mut Self::Value {
+                match value {
+                    match_helper_lhs!(Box, v) => match_helper_rhs_mut!(Box, v),
+                    _ => unreachable!(),
+                }
+            }
+        }
     };
-    // TODO we really want to take &Arc, but can't make it an assoc type
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Arc)) => {
-        singleton!($name($key, $key_ty, $value_ty, std::sync::Arc<$value_ty>, Arc))
+        singleton!($name($key, $key_ty, $value_ty, std::sync::Arc<$value_ty>, Arc));
+
+        impl ArcSingleton for $name {}
     };
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Ref)) => {
         singleton!($name($key, $key_ty, $value_ty, &'static $value_ty, Ref))
@@ -53,21 +85,21 @@ macro_rules! singleton {
             const KEY: $key_ty = $key;
             type ArgValue = $arg_value_ty;
 
-            fn from_value(value: crate::SinValue) -> Self::ArgValue {
+            fn from_value(value: $crate::SinValue) -> Self::ArgValue {
                 match value {
                     match_helper_lhs!($variant, v) => match_helper_rhs!($variant, v),
                     _ => unreachable!(),
                 }
             }
 
-            fn from_value_ref(value: &crate::SinValue) -> &Self::Value {
+            fn from_value_ref(value: &$crate::SinValue) -> &Self::Value {
                 match value {
                     match_helper_lhs!($variant, v) => match_helper_rhs_ref!($variant, v),
                     _ => unreachable!(),
                 }
             }
 
-            fn to_value(value: Self::ArgValue) -> crate::SinValue {
+            fn to_value(value: Self::ArgValue) -> $crate::SinValue {
                 init_helper!($variant, value)
             }
         }
@@ -76,25 +108,25 @@ macro_rules! singleton {
 
 macro_rules! init_helper {
     (U64, $value: ident) => {
-        crate::SinValue::U64($value)
+        $crate::SinValue::U64($value)
     };
     (Box, $value: ident) => {
-        crate::SinValue::Box(Box::new($value) as Box<dyn Any + Send + Sync>)
+        $crate::SinValue::Box(Box::new($value) as Box<dyn Any + Send + Sync>)
     };
     (Arc, $value: ident) => {
-        crate::SinValue::Arc($value.clone() as Arc<dyn Any + Send + Sync>)
+        $crate::SinValue::Arc($value.clone() as Arc<dyn Any + Send + Sync>)
     };
     (Ref, $value: ident) => {
-        crate::SinValue::Ref($value as &'static (dyn Any + Send + Sync))
+        $crate::SinValue::Ref($value as &'static (dyn Any + Send + Sync))
     };
 }
 
 macro_rules! match_helper_lhs {
     (U64, $value: ident) => {
-        crate::SinValue::U64($value)
+        $crate::SinValue::U64($value)
     };
     ($variant: ident, $value: ident) => {
-        crate::SinValue::$variant($value)
+        $crate::SinValue::$variant($value)
     };
 }
 
@@ -122,11 +154,18 @@ macro_rules! match_helper_rhs_ref {
     };
 }
 
+macro_rules! match_helper_rhs_mut {
+    (U64, $value: ident) => {
+        $value
+    };
+    ($variant: ident, $value: ident) => {
+        $value.downcast_mut().unwrap()
+    };
+}
+
 #[macro_export]
 macro_rules! tables {
     ($($name: ident ($key_ty: ty, $value_ty: ty)),*) => {
-        // allow case mismatch
-
         $(
             #[derive(Default)]
             pub struct $name;
@@ -139,10 +178,10 @@ macro_rules! tables {
             impl TableDesc<TableStorage> for $name {
                 const NAME: &'static str = stringify!($name);
 
-                fn get_table(storage: &TableStorage) -> &crate::Table<Self> {
+                fn get_table(storage: &TableStorage) -> &$crate::Table<Self> {
                     &storage.$name
                 }
-                fn get_table_mut(storage: &mut TableStorage) -> &mut crate::Table<Self> {
+                fn get_table_mut(storage: &mut TableStorage) -> &mut $crate::Table<Self> {
                     &mut storage.$name
                 }
             }
@@ -153,14 +192,14 @@ macro_rules! tables {
         struct TableStorage {
             $($name: $crate::Table<$name>),*
         }
-        impl crate::schema::GeneratedStorage for TableStorage {}
+        impl GeneratedStorage for TableStorage {}
 
         pub type KvStore = $crate::KvStore<TableStorage>;
 
         impl KvStore {
             pub fn new() -> Self {
-                crate::KvStore {
-                    storage: std::sync::RwLock::new(crate::Storage::new()),
+                $crate::KvStore {
+                    storage: std::sync::RwLock::new($crate::Storage::new()),
                 }
             }
         }

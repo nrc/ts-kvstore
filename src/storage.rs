@@ -6,14 +6,16 @@ use std::{
     sync::Arc,
 };
 
-pub(crate) struct Storage<TableStorage: schema::GeneratedStorage> {
+#[doc(hidden)]
+pub struct Storage<TableStorage: schema::GeneratedStorage> {
     pub(crate) singletons: HashMap<u64, (Owner, SinValue), crate::hasher::NoopU64Builder>,
     singleton_hash_builder: RandomState,
     pub(crate) tables: TableStorage,
 }
 
 impl<TableStorage: schema::GeneratedStorage> Storage<TableStorage> {
-    pub(crate) fn new() -> Self {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
         Storage {
             singletons: HashMap::with_hasher(crate::hasher::NoopU64Builder),
             singleton_hash_builder: RandomState::new(),
@@ -42,8 +44,9 @@ impl<TableStorage: schema::GeneratedStorage> Storage<TableStorage> {
     }
 }
 
+#[doc(hidden)]
 #[derive(Default)]
-pub(crate) enum SinValue {
+pub enum SinValue {
     #[default]
     None,
     // TODO add other special cases
@@ -53,8 +56,9 @@ pub(crate) enum SinValue {
     Ref(&'static (dyn Any + Send + Sync)),
 }
 
+#[doc(hidden)]
 #[derive(Default)]
-pub(crate) struct Table<D: schema::DataDesc> {
+pub struct Table<D: schema::DataDesc> {
     pub(crate) owner: Option<Owner>,
     pub(crate) data: HashMap<D::Key, D::Value>,
 }

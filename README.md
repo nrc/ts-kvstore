@@ -2,7 +2,7 @@
 
 TODO
 
-- example
+- example - flesh out
 - tests
 - docs
   - safety

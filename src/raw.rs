@@ -1,7 +1,6 @@
 use crate::{Error, KvStore, Owner, Result, iter::TableIterator, schema, storage::SinValue};
 use std::{borrow::Borrow, sync::Arc};
 
-#[allow(private_bounds)]
 impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     // Non-transaction singleton API.
     // TODO Do we need try_ variations for all of these where we use try_read/try_write?

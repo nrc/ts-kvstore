@@ -37,18 +37,18 @@ pub trait TableDesc<Storage: GeneratedStorage>: DataDesc {
     fn get_table_mut(storage: &mut Storage) -> &mut Table<Self>;
 }
 
-pub(crate) trait GeneratedStorage: Default {}
+#[doc(hidden)]
+pub trait GeneratedStorage: Default {}
 
-// TODO how to use these externally?
 #[macro_export]
 macro_rules! singleton {
     ($name: ident ($key: expr, $key_ty: ty, u64)) => {
         singleton!($name($key, $key_ty, u64, u64, U64));
 
-        impl MutSingleton for $name {
+        impl $crate::schema::MutSingleton for $name {
             fn from_value_mut(value: &mut $crate::storage::SinValue) -> &mut Self::Value {
                 match value {
-                    match_helper_lhs!(U64, v) => match_helper_rhs_mut!(U64, v),
+                    $crate::match_helper_lhs!(U64, v) => $crate::match_helper_rhs_mut!(U64, v),
                     _ => unreachable!(),
                 }
             }
@@ -57,10 +57,10 @@ macro_rules! singleton {
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Box)) => {
         singleton!($name($key, $key_ty, $value_ty, $value_ty, Box));
 
-        impl MutSingleton for $name {
+        impl $crate::schema::MutSingleton for $name {
             fn from_value_mut(value: &mut $crate::storage::SinValue) -> &mut Self::Value {
                 match value {
-                    match_helper_lhs!(Box, v) => match_helper_rhs_mut!(Box, v),
+                    $crate::match_helper_lhs!(Box, v) => $crate::match_helper_rhs_mut!(Box, v),
                     _ => unreachable!(),
                 }
             }
@@ -69,7 +69,7 @@ macro_rules! singleton {
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Arc)) => {
         singleton!($name($key, $key_ty, $value_ty, std::sync::Arc<$value_ty>, Arc));
 
-        impl ArcSingleton for $name {}
+        impl $crate::schema::ArcSingleton for $name {}
     };
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Ref)) => {
         singleton!($name($key, $key_ty, $value_ty, &'static $value_ty, Ref))
@@ -77,36 +77,42 @@ macro_rules! singleton {
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, $arg_value_ty: ty, $variant: ident)) => {
         pub struct $name;
 
-        impl DataDesc for $name {
+        impl $crate::schema::DataDesc for $name {
             type Key = $key_ty;
             type Value = $value_ty;
         }
 
-        impl Singleton for $name {
+        impl $crate::schema::Singleton for $name {
             const KEY: $key_ty = $key;
             type ArgValue = $arg_value_ty;
 
             fn from_value(value: $crate::storage::SinValue) -> Self::ArgValue {
                 match value {
-                    match_helper_lhs!($variant, v) => match_helper_rhs!($variant, v),
+                    $crate::match_helper_lhs!($variant, v) => {
+                        $crate::match_helper_rhs!($variant, v)
+                    }
                     _ => unreachable!(),
                 }
             }
 
             fn from_value_ref(value: &$crate::storage::SinValue) -> &Self::Value {
                 match value {
-                    match_helper_lhs!($variant, v) => match_helper_rhs_ref!($variant, v),
+                    $crate::match_helper_lhs!($variant, v) => {
+                        $crate::match_helper_rhs_ref!($variant, v)
+                    }
                     _ => unreachable!(),
                 }
             }
 
             fn to_value(value: Self::ArgValue) -> $crate::storage::SinValue {
-                init_helper!($variant, value)
+                $crate::init_helper!($variant, value)
             }
         }
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
 macro_rules! init_helper {
     (U64, $value: ident) => {
         $crate::storage::SinValue::U64($value)
@@ -122,6 +128,8 @@ macro_rules! init_helper {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
 macro_rules! match_helper_lhs {
     (U64, $value: ident) => {
         $crate::storage::SinValue::U64($value)
@@ -131,6 +139,8 @@ macro_rules! match_helper_lhs {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
 macro_rules! match_helper_rhs {
     (U64, $value: ident) => {
         $value
@@ -146,6 +156,8 @@ macro_rules! match_helper_rhs {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
 macro_rules! match_helper_rhs_ref {
     (U64, $value: ident) => {
         $value
@@ -155,6 +167,8 @@ macro_rules! match_helper_rhs_ref {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
 macro_rules! match_helper_rhs_mut {
     (U64, $value: ident) => {
         $value
@@ -171,12 +185,12 @@ macro_rules! tables {
             #[derive(Default)]
             pub struct $name;
 
-            impl DataDesc for $name {
+            impl $crate::schema::DataDesc for $name {
                 type Key = $key_ty;
                 type Value = $value_ty;
             }
 
-            impl TableDesc<TableStorage> for $name {
+            impl $crate::schema::TableDesc<TableStorage> for $name {
                 const NAME: &'static str = stringify!($name);
 
                 fn get_table(storage: &TableStorage) -> &$crate::storage::Table<Self> {
@@ -190,18 +204,24 @@ macro_rules! tables {
 
         #[derive(Default)]
         #[allow(non_snake_case)]
-        struct TableStorage {
+        pub struct TableStorage {
             $($name: $crate::storage::Table<$name>),*
         }
-        impl GeneratedStorage for TableStorage {}
+        impl $crate::schema::GeneratedStorage for TableStorage {}
 
-        pub type KvStore = $crate::KvStore<TableStorage>;
+        pub struct KvStore($crate::KvStore<TableStorage>);
 
         impl KvStore {
             pub fn new() -> Self {
-                $crate::KvStore {
-                    storage: std::sync::RwLock::new($crate::storage::Storage::new()),
-                }
+                KvStore($crate::KvStore::new_with_storage(std::sync::RwLock::new($crate::storage::Storage::new())))
+            }
+        }
+
+        impl std::ops::Deref for KvStore {
+            type Target = $crate::KvStore<TableStorage>;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
             }
         }
     };

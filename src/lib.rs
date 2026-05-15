@@ -12,13 +12,21 @@ use std::sync::RwLock;
 mod hasher;
 mod iter;
 mod raw;
-mod schema;
-mod storage;
+#[doc(hidden)]
+pub mod schema;
+#[doc(hidden)]
+pub mod storage;
 mod transactions;
 
-#[allow(private_bounds)]
 pub struct KvStore<TableStorage: schema::GeneratedStorage> {
     storage: RwLock<storage::Storage<TableStorage>>,
+}
+
+impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
+    #[doc(hidden)]
+    pub fn new_with_storage(storage: RwLock<storage::Storage<TableStorage>>) -> Self {
+        KvStore { storage }
+    }
 }
 
 pub type Owner = &'static str;

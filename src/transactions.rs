@@ -1,7 +1,6 @@
 use crate::{KvStore, Owner, schema, storage::Storage};
 use std::sync::{RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
-#[allow(private_bounds)]
 impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     // Transactions.
 
@@ -41,24 +40,20 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     }
 }
 
-#[allow(private_bounds)]
 pub struct Transaction<'a, TableStorage: schema::GeneratedStorage> {
     guard: RwLockWriteGuard<'a, Storage<TableStorage>>,
     owner: Owner,
 }
 
-#[allow(private_bounds)]
 impl<TableStorage: schema::GeneratedStorage> Transaction<'_, TableStorage> {
     // singleton and table API
 }
 
-#[allow(private_bounds)]
 pub struct RoTransaction<'a, TableStorage: schema::GeneratedStorage> {
     guard: RwLockReadGuard<'a, Storage<TableStorage>>,
     owner: Owner,
 }
 
-#[allow(private_bounds)]
 impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     // singleton and table read API (get/with/iter)
 }

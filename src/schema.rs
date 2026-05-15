@@ -1,5 +1,6 @@
 #![allow(private_interfaces, private_bounds, unused_macros)]
 
+use crate::storage::{SinValue, Table};
 use std::{any::Any, hash::Hash, sync::Arc};
 
 pub trait DataDesc: Sized {
@@ -11,29 +12,29 @@ pub trait Singleton: DataDesc {
     const KEY: Self::Key;
     type ArgValue;
 
-    fn from_value(value: crate::SinValue) -> Self::ArgValue;
-    fn from_value_ref(value: &crate::SinValue) -> &Self::Value;
-    fn to_value(value: Self::ArgValue) -> crate::SinValue;
+    fn from_value(value: SinValue) -> Self::ArgValue;
+    fn from_value_ref(value: &SinValue) -> &Self::Value;
+    fn to_value(value: Self::ArgValue) -> SinValue;
 }
 
 pub trait ArcSingleton: Singleton {
-    fn from_value_arc(value: &crate::SinValue) -> Arc<Self::Value> {
+    fn from_value_arc(value: &SinValue) -> Arc<Self::Value> {
         match value {
-            crate::SinValue::Arc(a) => a.clone().downcast().unwrap(),
+            SinValue::Arc(a) => a.clone().downcast().unwrap(),
             _ => unreachable!(),
         }
     }
 }
 
 pub trait MutSingleton: Singleton {
-    fn from_value_mut(value: &mut crate::SinValue) -> &mut Self::Value;
+    fn from_value_mut(value: &mut SinValue) -> &mut Self::Value;
 }
 
 pub trait TableDesc<Storage: GeneratedStorage>: DataDesc {
     const NAME: &'static str;
 
-    fn get_table(storage: &Storage) -> &crate::Table<Self>;
-    fn get_table_mut(storage: &mut Storage) -> &mut crate::Table<Self>;
+    fn get_table(storage: &Storage) -> &Table<Self>;
+    fn get_table_mut(storage: &mut Storage) -> &mut Table<Self>;
 }
 
 pub(crate) trait GeneratedStorage: Default {}
@@ -45,7 +46,7 @@ macro_rules! singleton {
         singleton!($name($key, $key_ty, u64, u64, U64));
 
         impl MutSingleton for $name {
-            fn from_value_mut(value: &mut $crate::SinValue) -> &mut Self::Value {
+            fn from_value_mut(value: &mut $crate::storage::SinValue) -> &mut Self::Value {
                 match value {
                     match_helper_lhs!(U64, v) => match_helper_rhs_mut!(U64, v),
                     _ => unreachable!(),
@@ -57,7 +58,7 @@ macro_rules! singleton {
         singleton!($name($key, $key_ty, $value_ty, $value_ty, Box));
 
         impl MutSingleton for $name {
-            fn from_value_mut(value: &mut $crate::SinValue) -> &mut Self::Value {
+            fn from_value_mut(value: &mut $crate::storage::SinValue) -> &mut Self::Value {
                 match value {
                     match_helper_lhs!(Box, v) => match_helper_rhs_mut!(Box, v),
                     _ => unreachable!(),
@@ -85,21 +86,21 @@ macro_rules! singleton {
             const KEY: $key_ty = $key;
             type ArgValue = $arg_value_ty;
 
-            fn from_value(value: $crate::SinValue) -> Self::ArgValue {
+            fn from_value(value: $crate::storage::SinValue) -> Self::ArgValue {
                 match value {
                     match_helper_lhs!($variant, v) => match_helper_rhs!($variant, v),
                     _ => unreachable!(),
                 }
             }
 
-            fn from_value_ref(value: &$crate::SinValue) -> &Self::Value {
+            fn from_value_ref(value: &$crate::storage::SinValue) -> &Self::Value {
                 match value {
                     match_helper_lhs!($variant, v) => match_helper_rhs_ref!($variant, v),
                     _ => unreachable!(),
                 }
             }
 
-            fn to_value(value: Self::ArgValue) -> $crate::SinValue {
+            fn to_value(value: Self::ArgValue) -> $crate::storage::SinValue {
                 init_helper!($variant, value)
             }
         }
@@ -108,25 +109,25 @@ macro_rules! singleton {
 
 macro_rules! init_helper {
     (U64, $value: ident) => {
-        $crate::SinValue::U64($value)
+        $crate::storage::SinValue::U64($value)
     };
     (Box, $value: ident) => {
-        $crate::SinValue::Box(Box::new($value) as Box<dyn Any + Send + Sync>)
+        $crate::storage::SinValue::Box(Box::new($value) as Box<dyn Any + Send + Sync>)
     };
     (Arc, $value: ident) => {
-        $crate::SinValue::Arc($value.clone() as Arc<dyn Any + Send + Sync>)
+        $crate::storage::SinValue::Arc($value.clone() as Arc<dyn Any + Send + Sync>)
     };
     (Ref, $value: ident) => {
-        $crate::SinValue::Ref($value as &'static (dyn Any + Send + Sync))
+        $crate::storage::SinValue::Ref($value as &'static (dyn Any + Send + Sync))
     };
 }
 
 macro_rules! match_helper_lhs {
     (U64, $value: ident) => {
-        $crate::SinValue::U64($value)
+        $crate::storage::SinValue::U64($value)
     };
     ($variant: ident, $value: ident) => {
-        $crate::SinValue::$variant($value)
+        $crate::storage::SinValue::$variant($value)
     };
 }
 
@@ -178,10 +179,10 @@ macro_rules! tables {
             impl TableDesc<TableStorage> for $name {
                 const NAME: &'static str = stringify!($name);
 
-                fn get_table(storage: &TableStorage) -> &$crate::Table<Self> {
+                fn get_table(storage: &TableStorage) -> &$crate::storage::Table<Self> {
                     &storage.$name
                 }
-                fn get_table_mut(storage: &mut TableStorage) -> &mut $crate::Table<Self> {
+                fn get_table_mut(storage: &mut TableStorage) -> &mut $crate::storage::Table<Self> {
                     &mut storage.$name
                 }
             }
@@ -190,7 +191,7 @@ macro_rules! tables {
         #[derive(Default)]
         #[allow(non_snake_case)]
         struct TableStorage {
-            $($name: $crate::Table<$name>),*
+            $($name: $crate::storage::Table<$name>),*
         }
         impl GeneratedStorage for TableStorage {}
 
@@ -199,7 +200,7 @@ macro_rules! tables {
         impl KvStore {
             pub fn new() -> Self {
                 $crate::KvStore {
-                    storage: std::sync::RwLock::new($crate::Storage::new()),
+                    storage: std::sync::RwLock::new($crate::storage::Storage::new()),
                 }
             }
         }

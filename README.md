@@ -5,7 +5,12 @@ TODO
 - example
 - tests
 - docs
+  - safety
+  - SinValue
+  - table iterator
+  - singletons hashmap and hasher
+  - schema traits
+  - macros
 - refactor
-  - modules: iter, transactions, raw
 - check ownership
 - transactional API

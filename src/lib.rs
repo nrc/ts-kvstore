@@ -6,6 +6,11 @@
 //! - Singletons and tables
 //! - Raw and transactional APIs
 //! - Ownership
+//! 
+//! ## Implementation
+//! 
+//! - A lot of stuff is pub just for macros; shouldn't be used
+//! - External hash and hasher for singletons
 
 use std::sync::RwLock;
 

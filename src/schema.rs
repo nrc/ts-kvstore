@@ -1,3 +1,4 @@
+//! Traits and macros for defining the KvStore schema.
 #![allow(private_interfaces, private_bounds, unused_macros)]
 
 use crate::storage::{SinValue, Table};
@@ -37,7 +38,6 @@ pub trait TableDesc<Storage: GeneratedStorage>: DataDesc {
     fn get_table_mut(storage: &mut Storage) -> &mut Table<Self>;
 }
 
-#[doc(hidden)]
 pub trait GeneratedStorage: Default {}
 
 #[macro_export]
@@ -75,6 +75,7 @@ macro_rules! singleton {
         singleton!($name($key, $key_ty, $value_ty, &'static $value_ty, Ref))
     };
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, $arg_value_ty: ty, $variant: ident)) => {
+        #[allow(non_camel_case_types)]
         pub struct $name;
 
         impl $crate::schema::DataDesc for $name {
@@ -257,12 +258,16 @@ mod test {
 
         let store = KvStore::new();
 
-        store.insert_row::<Foo>("owner", "hello", "world".to_owned());
-        assert_eq!(store.get_row::<Foo>("owner", "hello").unwrap(), "world");
+        store
+            .table::<Foo>("owner")
+            .insert("hello", "world".to_owned());
+        assert_eq!(store.table::<Foo>("owner").get("hello").unwrap(), "world");
 
-        store.insert_row::<Bar>("owner", 5, vec!["boo".to_owned(), "bang".to_owned()]);
+        store
+            .table::<Bar>("owner")
+            .insert(5, vec!["boo".to_owned(), "bang".to_owned()]);
         assert_eq!(
-            store.get_row::<Bar>("owner", 5).unwrap(),
+            store.table::<Bar>("owner").get(&5).unwrap(),
             vec!["boo".to_owned(), "bang".to_owned()]
         );
     }

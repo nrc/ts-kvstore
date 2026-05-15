@@ -1,3 +1,5 @@
+//! Iterate over a table
+
 use crate::{schema, storage::Storage};
 use std::{marker::PhantomPinned, pin::Pin, sync::RwLockReadGuard};
 

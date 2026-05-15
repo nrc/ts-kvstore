@@ -1,9 +1,9 @@
+//! KvStore transactional API.
+
 use crate::{KvStore, Owner, schema, storage::Storage};
 use std::sync::{RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
 impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
-    // Transactions.
-
     pub fn begin_transaction(&self, owner: Owner) -> Transaction<'_, TableStorage> {
         Transaction {
             guard: self.storage.write().unwrap(),

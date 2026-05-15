@@ -8,14 +8,12 @@ For ident-keys, do we even need keys and key types?
 
 TODO
 
-- tests
 - docs
-  - safety
-  - SinValue
-  - table iterator
-  - singletons hashmap and hasher
-  - schema traits
-  - macros
+  - crate-level
+- async!
+- check-in on static/dynamic-ness of singleton values
+- tests
 - refactor
 - check ownership
+  - handle SinValue::None
 - transactional API

@@ -1,5 +1,9 @@
+//! A no-op hasher to be used on already hashed data. Used to store singleton KVs which are hashed
+//! externally to the HashMap.
+
 use std::hash::{BuildHasher, Hasher};
 
+/// A builder for creating [`NoopU64Hasher`].
 pub struct NoopU64Builder;
 
 impl BuildHasher for NoopU64Builder {
@@ -10,19 +14,23 @@ impl BuildHasher for NoopU64Builder {
     }
 }
 
+/// A hasher which passes through exactly one `u64` and panics on any other input.
 pub struct NoopU64Hasher {
     value: Option<u64>,
 }
 
 impl Hasher for NoopU64Hasher {
+    /// Panics if a `u64` has not been hashed.
     fn finish(&self) -> u64 {
         self.value.unwrap()
     }
 
+    /// Always panics.
     fn write(&mut self, _bytes: &[u8]) {
         panic!();
     }
 
+    /// Panics if a `u64` has already been hashed.
     fn write_u64(&mut self, i: u64) {
         match &self.value {
             None => self.value = Some(i),

@@ -4,13 +4,23 @@
 use crate::storage::{SinValue, Table};
 use std::{any::Any, hash::Hash, sync::Arc};
 
+/// Describes the types of a key/value pair or table of pairs in the store.
+///
+/// Prefer to use the macros in this module rather than this trait directly.
 pub trait DataDesc: Sized {
+    /// The type of the key.
     type Key: Hash + Eq;
+    /// The type of the value.
     type Value: Any + Send + Sync;
 }
 
+/// A singleton key/value.
+///
+/// Prefer to use the macros in this module rather than this trait directly.
 pub trait Singleton: DataDesc {
+    /// The value of the key.
     const KEY: Self::Key;
+    /// The type used to initialize and access the value.
     type ArgValue;
 
     fn from_value(value: SinValue) -> Self::ArgValue;
@@ -18,6 +28,12 @@ pub trait Singleton: DataDesc {
     fn to_value(value: Self::ArgValue) -> SinValue;
 }
 
+/// A singleton key/value which is store as an `Arc`.
+///
+/// Implementing this trait for non-`Arc` values will cause [`crate::KvStore::get_arc`] to panic (but is
+/// not unsafe).
+///
+/// Prefer to use the macros in this module rather than this trait directly.
 pub trait ArcSingleton: Singleton {
     fn from_value_arc(value: &SinValue) -> Arc<Self::Value> {
         match value {
@@ -27,19 +43,36 @@ pub trait ArcSingleton: Singleton {
     }
 }
 
+/// Mark a singleton value as mutable (i.e., the value in the store is unique).
+///
+/// Prefer to use the macros in this module rather than this trait directly.
 pub trait MutSingleton: Singleton {
     fn from_value_mut(value: &mut SinValue) -> &mut Self::Value;
 }
 
+/// Describes tabular key/values in the store.
+///
+/// Prefer to use the macros in this module rather than this trait directly.
 pub trait TableDesc<Storage: GeneratedStorage>: DataDesc {
+    /// The name of the table.
     const NAME: &'static str;
 
     fn get_table(storage: &Storage) -> &Table<Self>;
     fn get_table_mut(storage: &mut Storage) -> &mut Table<Self>;
 }
 
+/// Marker trait to indicate a storage implementation.
+///
+/// This should be considered a sealed trait and not implemented except by the macros in this module.
+/// Unfortunately it has to be public because of macro visibility hygiene.
+#[doc(hidden)]
 pub trait GeneratedStorage: Default {}
 
+/// Macro to declare a singleton key/value in the store.
+///
+/// Does not need to be used within or near the store declaration, but also is not linked to a specific
+/// store. Using a generated accessor on a store different to the store the key/value was stored in
+/// will have unpredictable results (panics, memory safety, etc.).
 #[macro_export]
 macro_rules! singleton {
     ($name: ident ($key: expr, $key_ty: ty, u64)) => {
@@ -75,6 +108,7 @@ macro_rules! singleton {
         singleton!($name($key, $key_ty, $value_ty, &'static $value_ty, Ref))
     };
     ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, $arg_value_ty: ty, $variant: ident)) => {
+        /// Describes a singleton in the KV store.
         #[allow(non_camel_case_types)]
         pub struct $name;
 
@@ -179,10 +213,15 @@ macro_rules! match_helper_rhs_mut {
     };
 }
 
+/// Declare the tables in a key/value store.
+///
+/// Generates the store itself with the specified tables. Use with an empty body to generate a store
+/// for use only with singleton key/value pairs.
 #[macro_export]
 macro_rules! tables {
     ($($name: ident ($key_ty: ty, $value_ty: ty)),*) => {
         $(
+            /// Describes a table in the KV store.
             #[derive(Default)]
             pub struct $name;
 
@@ -203,6 +242,7 @@ macro_rules! tables {
             }
         )*
 
+        /// Macro-generated storage for all tabular data.
         #[derive(Default)]
         #[allow(non_snake_case)]
         pub struct TableStorage {
@@ -210,9 +250,13 @@ macro_rules! tables {
         }
         impl $crate::schema::GeneratedStorage for TableStorage {}
 
+        /// A key-value store.
+        ///
+        /// See [`$crate::KvStore`] (which this type implicitly derefences to) for full docs.
         pub struct KvStore($crate::KvStore<TableStorage>);
 
         impl KvStore {
+            /// Create a new, empty KV store as described by the schema macros.
             pub fn new() -> Self {
                 KvStore($crate::KvStore::new_with_storage(std::sync::RwLock::new($crate::storage::Storage::new())))
             }

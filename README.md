@@ -20,6 +20,5 @@ TODO
 - refactor
   - use Arc rather than Pin and unsafe for iterator? (only works with Tokio's RwLock)
 - check ownership
-  - handle SinValue::None
 - transactional API
  

@@ -14,7 +14,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         let storage = self.storage.read().unwrap();
         storage
             .get_singleton_value(&D::KEY)
-            .map(|(_, v)| D::from_value_ref(v).clone())
+            .map_singleton_value(|v| D::from_value_ref(v).clone())
     }
 
     /// Get a single value from the store by cloning an `Arc`.
@@ -24,7 +24,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         let storage = self.storage.read().unwrap();
         storage
             .get_singleton_value(&D::KEY)
-            .map(|(_, v)| D::from_value_arc(v))
+            .map_singleton_value(|v| D::from_value_arc(v))
     }
 
     /// Get immutable access to a value in the store by reference.
@@ -36,9 +36,9 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         f: impl FnOnce(&D::Value) -> T,
     ) -> Option<T> {
         let storage = self.storage.read().unwrap();
-        let value = &storage.get_singleton_value(&D::KEY)?.1;
-        let value = D::from_value_ref(value);
-        Some(f(value))
+        storage
+            .get_singleton_value(&D::KEY)
+            .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
     /// Insert a single value into the store.
@@ -55,7 +55,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         storage
             .singletons
             .insert(key, (owner, D::to_value(value)))
-            .map(|(_, v)| D::from_value(v))
+            .map_singleton_value(|v| D::from_value(v))
     }
 
     /// Get mutable access to a value in the store.
@@ -67,9 +67,9 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         mut f: impl FnMut(&mut D::Value) -> T,
     ) -> Option<T> {
         let mut storage = self.storage.write().unwrap();
-        let value = storage.get_singleton_value_mut(&D::KEY)?.1;
-        let value = D::from_value_mut(value);
-        Some(f(value))
+        storage
+            .get_singleton_value_mut(&D::KEY)
+            .map_singleton_value(|v| f(D::from_value_mut(v)))
     }
 
     /// Remove a single value from the store.
@@ -81,7 +81,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         storage
             .singletons
             .remove(&key)
-            .map(|(_, v)| D::from_value(v))
+            .map_singleton_value(|v| D::from_value(v))
     }
 
     /// Remove a single value from the store while preserving ownership of the key/value.
@@ -95,7 +95,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         storage
             .singletons
             .insert(key, (owner, SinValue::None))
-            .map(|(_, v)| D::from_value(v))
+            .map_singleton_value(|v| D::from_value(v))
     }
 
     /// Operate on tables of key/values in the store.
@@ -112,6 +112,42 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
             store: self,
             owner,
             table: PhantomData,
+        }
+    }
+}
+
+/// Helper trait to handle `SinValue::None`
+trait OptSingletonValue {
+    type Value;
+    fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T>;
+}
+
+impl<'a> OptSingletonValue for Option<&'a (Owner, SinValue)> {
+    type Value = &'a SinValue;
+    fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T> {
+        match self? {
+            (_, SinValue::None) => None,
+            (_, v) => Some(f(v)),
+        }
+    }
+}
+
+impl<'a> OptSingletonValue for Option<(&'a Owner, &'a mut SinValue)> {
+    type Value = &'a mut SinValue;
+    fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T> {
+        match self? {
+            (_, SinValue::None) => None,
+            (_, v) => Some(f(v)),
+        }
+    }
+}
+
+impl OptSingletonValue for Option<(Owner, SinValue)> {
+    type Value = SinValue;
+    fn map_singleton_value<T>(self, f: impl FnOnce(SinValue) -> T) -> Option<T> {
+        match self? {
+            (_, SinValue::None) => None,
+            (_, v) => Some(f(v)),
         }
     }
 }

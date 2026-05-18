@@ -14,7 +14,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         let storage = self.storage.read().unwrap();
         storage
             .get_singleton_value(&D::KEY)
-            .map_singleton_value(|v| D::from_value_ref(v).clone())
+            .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
     /// Get a single value from the store by cloning an `Arc`.
@@ -154,8 +154,8 @@ impl OptSingletonValue for Option<(Owner, SinValue)> {
 
 /// Abstracts a table of key/values pairs in the store.
 ///
-/// `KvTable` values have no transactional semantics and only exists as a convenience for accessing
-/// tabular KVs.
+/// `KvTable` has no transactional semantics and only exists as a convenience for accessing
+/// tabular data.
 pub struct KvTable<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStorage>> {
     store: &'a KvStore<TableStorage>,
     owner: Owner,

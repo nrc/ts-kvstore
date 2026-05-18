@@ -54,7 +54,16 @@
 //! mutated by that owner. Reading data is not protected by ownership. A table has a single owner for
 //! all rows.
 //!
-//! TODO async
+//! ## Async access
+//!
+//! ts-kvstore has a synchronous API and no async functions. It is safe to use it in an async, as
+//! long as there are **no `await` points inside a transaction** (which can lead to degraded
+//! performance or deadlock).
+//!
+//! A global lock is used internally and is held for the duration of a transaction. This is a `std`
+//! `RwLock` and so waiting for it will block the waiting thread (not just the async task). This is
+//! unlikely to be an issue as long as transactions are kept short and don't `await` (which could
+//! cause the task with the lock to yield to another task which might block waiting for that lock).
 //!
 //! ## Implementation notes.
 //!
@@ -87,11 +96,11 @@ pub mod storage;
 mod transactions;
 
 #[doc(inline)]
-pub use raw::KvTable;
-#[doc(inline)]
 pub use iter::TableIterator;
 #[doc(inline)]
-pub use transactions::{Transaction, RoTransaction};
+pub use raw::KvTable;
+#[doc(inline)]
+pub use transactions::{RoTransaction, Transaction};
 
 /// A key-value store. See the crate docs for details. Its schema is described by `TableStorage`.
 pub struct KvStore<TableStorage: schema::GeneratedStorage> {

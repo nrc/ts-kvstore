@@ -10,10 +10,16 @@ TODO
 
 - docs
   - crate-level
-- async!
+- async?
+  - replace RwLock with Tokio version
+  - do we want to be async?
+    - if we want to `await` inside transactions
+    - can we afford to block the whole thread when waiting for the lock?
 - check-in on static/dynamic-ness of singleton values
 - tests
 - refactor
+  - use Arc rather than Pin and unsafe for iterator? (only works with Tokio's RwLock)
 - check ownership
   - handle SinValue::None
 - transactional API
+ 

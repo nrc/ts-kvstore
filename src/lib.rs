@@ -1,4 +1,32 @@
-//! # An in-memory KV store for the Rust Tailscale client.
+//! # ts-kvstore
+//!
+//! An in-memory, async, concurrent, and strongly-typed KV store for the Rust Tailscale client.
+//!
+//! Example:
+//!
+//! ```rust
+//! # use ts_kvstore::{Owner, singleton, tables};
+//! # const OWNER: Owner = "owner";
+//!
+//! singleton!(foo("a", &'static str, u64));
+//! tables!(Nodes(u32, String));
+//!
+//! pub fn main() {
+//!     let store = KvStore::new();
+//!
+//!     store.insert::<foo>(OWNER, 42);
+//!
+//!     let nodes = store.table::<Nodes>(OWNER);
+//!     nodes.insert(4, "a".to_owned());
+//!     nodes.insert(0, "b".to_owned());
+//!     nodes.insert(10, "c".to_owned());
+//!     nodes.insert(400, "d".to_owned());
+//!
+//!     assert_eq!(nodes.len(), 4);
+//!
+//!     println!("singleton: {}, row 4: {}", store.get::<foo>(OWNER).unwrap(), nodes.get(&4).unwrap());
+//! }
+//! ```
 //!
 //! ## Concepts
 //!
@@ -6,6 +34,7 @@
 //! - Singletons and tables
 //! - Raw and transactional APIs, transactional guarantees, RO transactions
 //! - Ownership
+//! - async
 //!
 //! ## Implementation
 //!

@@ -30,17 +30,50 @@
 //!
 //! ## Concepts
 //!
-//! - Typed KVs and schema macros
-//! - Singletons and tables
-//! - Raw and transactional APIs, transactional guarantees, RO transactions
-//! - Ownership
-//! - async
+//! There are two broad kinds of data which can be stored in a KV store: singleton data and tabular
+//! data. The former are simple key/value pairs, the latter are tables of data where a key identifies
+//! a row in the table. Due to implementation details there are some differences in the APIs for each
+//! kind of data, but they have roughly the same operations available.
 //!
-//! ## Implementation
+//! The store is strongly typed. Both singletons and tables must be statically declared and both keys
+//! and values have types from these declarations. Macros for these declations are in the [`schema`]
+//! module. They expand into an empty type for each singleton or table, and trait impls for these
+//! types. The types are then used as type parameters for all operations.
 //!
-//! - A lot of stuff is pub just for macros; shouldn't be used
-//! - External hash and hasher for singletons, SinValue
-//! - KvStore wrapper around a KvStore
+//! Each singleton KV pair has its own types. A table has a single key type and single value type
+//! for all rows in the table.
+//!
+//! The data store has raw and transactional APIs. The raw API guarantees that each operation is
+//! atomic, but has no guarantees across multiple operatons. The transactional API groups operations
+//! into transactions which are atomic and serializable. Both singleton and tabular data can be part
+//! of a transaction, and tables and transactions are orthogonal. Transactions may be read/write or
+//! read-only.
+//!
+//! All data is owned. An owner is a simple token, its up to the user of the library to decide how
+//! to use these tokens and what rules to follow. Every KV pair has a single owner and can only be
+//! mutated by that owner. Reading data is not protected by ownership. A table has a single owner for
+//! all rows.
+//!
+//! TODO async
+//!
+//! ## Implementation notes.
+//!
+//! The schema macros are an 'essential' component of the system, not just a convenience. Unfortunately
+//! Rust macros do not have visibility/privacy hygiene, so many internal types and traits are public.
+//! Anything marked as `doc(hidden)` is meant for internal use only and should not be considered
+//! part of the API.
+//!
+//! Part of the work of the macros is to generate an internal storage struct. To ensure an ergonomic
+//! API, the generic [`KvStore`] is wrapped in a local `KvStore` which can be deref-ed to the inner,
+//! generic type. Users of the library should only use the generated type, but see the generic type
+//! for documentation.
+//!
+//! The implementation of storage for tabular data is one HashMap per table, and otherwise
+//! straighforward. For singleton data, we use a single HashMap which maps `u64` to `(Owner, SinValue)`.
+//! The internal key type is the hash of the external key (i.e., keys are hashed outside of the
+//! underlying HashMap). External values can be stored in different ways (inline, via an `Arc`, etc.)
+//! each of which is a variant of `SinValue`. The store transparently converts keys and values to
+//! their declared types.
 
 use std::sync::RwLock;
 
@@ -52,6 +85,13 @@ pub mod schema;
 #[doc(hidden)]
 pub mod storage;
 mod transactions;
+
+#[doc(inline)]
+pub use raw::KvTable;
+#[doc(inline)]
+pub use iter::TableIterator;
+#[doc(inline)]
+pub use transactions::{Transaction, RoTransaction};
 
 /// A key-value store. See the crate docs for details. Its schema is described by `TableStorage`.
 pub struct KvStore<TableStorage: schema::GeneratedStorage> {

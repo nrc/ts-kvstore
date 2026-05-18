@@ -8,8 +8,6 @@ For ident-keys, do we even need keys and key types?
 
 TODO
 
-- docs
-  - crate-level
 - async?
   - replace RwLock with Tokio version
   - do we want to be async?

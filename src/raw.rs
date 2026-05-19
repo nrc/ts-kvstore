@@ -1,7 +1,15 @@
 //! KvStore non-transactional API.
 
-use crate::{Error, KvStore, Owner, Result, iter::TableIterator, schema, storage::SinValue};
-use std::{borrow::Borrow, hash::Hash, marker::PhantomData, sync::Arc};
+use crate::{
+    Error, KvStore, Owner, Result, iter::TableIterator, schema, singleton::OptSingletonValue,
+    storage::SinValue,
+};
+use std::{
+    borrow::Borrow,
+    hash::Hash,
+    marker::PhantomData,
+    sync::{Arc, RwLockReadGuard},
+};
 
 impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Get a single value from the store by cloning the value.
@@ -116,42 +124,6 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     }
 }
 
-/// Helper trait to handle `SinValue::None`
-trait OptSingletonValue {
-    type Value;
-    fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T>;
-}
-
-impl<'a> OptSingletonValue for Option<&'a (Owner, SinValue)> {
-    type Value = &'a SinValue;
-    fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T> {
-        match self? {
-            (_, SinValue::None) => None,
-            (_, v) => Some(f(v)),
-        }
-    }
-}
-
-impl<'a> OptSingletonValue for Option<(&'a Owner, &'a mut SinValue)> {
-    type Value = &'a mut SinValue;
-    fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T> {
-        match self? {
-            (_, SinValue::None) => None,
-            (_, v) => Some(f(v)),
-        }
-    }
-}
-
-impl OptSingletonValue for Option<(Owner, SinValue)> {
-    type Value = SinValue;
-    fn map_singleton_value<T>(self, f: impl FnOnce(SinValue) -> T) -> Option<T> {
-        match self? {
-            (_, SinValue::None) => None,
-            (_, v) => Some(f(v)),
-        }
-    }
-}
-
 /// Abstracts a table of key/values pairs in the store.
 ///
 /// `KvTable` has no transactional semantics and only exists as a convenience for accessing
@@ -198,7 +170,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStora
         D: 'static,
     {
         let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, TableStorage, D>::new(guard)
+        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D>::new(guard)
     }
 
     /// The number of key/value pairs in the table.

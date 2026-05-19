@@ -1,7 +1,11 @@
 //! Iterate over a table
 
 use crate::{schema, storage::Storage};
-use std::{marker::PhantomPinned, pin::Pin, sync::RwLockReadGuard};
+use std::{
+    marker::{PhantomData, PhantomPinned},
+    ops::Deref,
+    pin::Pin,
+};
 
 /// An iterator for a single table (described by the generic parameter `D`) in the KV store.
 ///
@@ -14,11 +18,12 @@ use std::{marker::PhantomPinned, pin::Pin, sync::RwLockReadGuard};
 #[allow(private_bounds)]
 pub struct TableIterator<
     'a,
+    Guard: Deref<Target = Storage<TableStorage>> + 'a,
     TableStorage: schema::GeneratedStorage + 'static,
     D: schema::TableDesc<TableStorage> + 'static,
 > {
     /// Guard on the KV store's storage (all of it).
-    guard: RwLockReadGuard<'a, Storage<TableStorage>>,
+    guard: Guard,
     /// An iterator over the `HashMap` representing the table.
     ///
     /// Invariants:
@@ -28,21 +33,24 @@ pub struct TableIterator<
     inner: Option<std::collections::hash_map::Iter<'static, D::Key, D::Value>>,
     /// `TableIterator` is `Unpin` because it requires `guard` to have a fixed address.
     _pin: PhantomPinned,
+    _a: PhantomData<&'a D::Value>,
 }
 
 #[allow(private_bounds)]
 impl<
     'a,
+    Guard: Deref<Target = Storage<TableStorage>> + 'a,
     TableStorage: schema::GeneratedStorage + 'static,
     D: schema::TableDesc<TableStorage> + 'static,
-> TableIterator<'a, TableStorage, D>
+> TableIterator<'a, Guard, TableStorage, D>
 {
     /// Create an iterator over the table described by `D`.
-    pub(crate) fn new(guard: RwLockReadGuard<'a, Storage<TableStorage>>) -> Pin<Box<Self>> {
+    pub(crate) fn new(guard: Guard) -> Pin<Box<Self>> {
         let mut result = Box::new(TableIterator {
             guard,
             inner: None,
             _pin: PhantomPinned,
+            _a: PhantomData,
         });
         let tables: *const _ = &result.guard.tables;
         // SAFETY: here we're extending the lifetime of the reference to the KV storage to `'static`.
@@ -64,8 +72,12 @@ impl<
     }
 }
 
-impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStorage>> Iterator
-    for Pin<Box<TableIterator<'a, TableStorage, D>>>
+impl<
+    'a,
+    Guard: Deref<Target = Storage<TableStorage>> + 'a,
+    TableStorage: schema::GeneratedStorage,
+    D: schema::TableDesc<TableStorage>,
+> Iterator for Pin<Box<TableIterator<'a, Guard, TableStorage, D>>>
 {
     type Item = (&'a D::Key, &'a D::Value);
 
@@ -75,8 +87,12 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStora
     }
 }
 
-impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStorage>> Drop
-    for TableIterator<'a, TableStorage, D>
+impl<
+    'a,
+    Guard: Deref<Target = Storage<TableStorage>> + 'a,
+    TableStorage: schema::GeneratedStorage,
+    D: schema::TableDesc<TableStorage>,
+> Drop for TableIterator<'a, Guard, TableStorage, D>
 {
     fn drop(&mut self) {
         // Ensure that `self.inner` is dropped before `self.guard`.

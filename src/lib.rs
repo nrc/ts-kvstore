@@ -47,7 +47,8 @@
 //! atomic, but has no guarantees across multiple operatons. The transactional API groups operations
 //! into transactions which are atomic and serializable. Both singleton and tabular data can be part
 //! of a transaction, and tables and transactions are orthogonal. Transactions may be read/write or
-//! read-only.
+//! read-only. Transactions don't need to be explicitly committed - the effect is 'commit on drop'
+//! but the implementation is that operations are individually committed.
 //!
 //! All data is owned. An owner is a simple token, its up to the user of the library to decide how
 //! to use these tokens and what rules to follow. Every KV pair has a single owner and can only be
@@ -91,6 +92,7 @@ mod iter;
 mod raw;
 #[doc(hidden)]
 pub mod schema;
+mod singleton;
 #[doc(hidden)]
 pub mod storage;
 mod transactions;

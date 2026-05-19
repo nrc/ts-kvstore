@@ -2,7 +2,7 @@
 //!
 //! An in-memory, async, concurrent, and strongly-typed KV store for the Rust Tailscale client.
 //!
-//! Example:
+//! # Example:
 //!
 //! ```rust
 //! # use ts_kvstore::{Owner, singleton, tables};
@@ -28,7 +28,7 @@
 //! }
 //! ```
 //!
-//! ## Concepts
+//! # Concepts
 //!
 //! There are two broad kinds of data which can be stored in a KV store: singleton data and tabular
 //! data. The former are simple key/value pairs, the latter are tables of data where a key identifies
@@ -54,7 +54,7 @@
 //! mutated by that owner. Reading data is not protected by ownership. A table has a single owner for
 //! all rows.
 //!
-//! ## Async access
+//! # Async access
 //!
 //! ts-kvstore has a synchronous API and no async functions. It is safe to use it in an async, as
 //! long as there are **no `await` points inside a transaction** (which can lead to degraded
@@ -65,7 +65,7 @@
 //! unlikely to be an issue as long as transactions are kept short and don't `await` (which could
 //! cause the task with the lock to yield to another task which might block waiting for that lock).
 //!
-//! ## Implementation notes.
+//! # Implementation notes.
 //!
 //! The schema macros are an 'essential' component of the system, not just a convenience. Unfortunately
 //! Rust macros do not have visibility/privacy hygiene, so many internal types and traits are public.

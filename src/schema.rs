@@ -73,6 +73,20 @@ pub trait GeneratedStorage: Default {}
 /// Does not need to be used within or near the store declaration, but also is not linked to a specific
 /// store. Using a generated accessor on a store different to the store the key/value was stored in
 /// will have unpredictable results (panics, memory safety, etc.).
+///
+/// # Syntax:
+///
+/// - `singleton!(Name(key, KeyType, u64))` to declare a value with type `u64`` and inline storage
+/// - `singleton!(Name(key, KeyType, ValueType, Box))` to declare a value with type `Box<ValueType>`
+/// - `singleton!(Name(key, KeyType, ValueType, Arc))` to declare a value with type `Arc<ValueType>`
+/// - `singleton!(Name(key, KeyType, ValueType, Ref))` to declare a value with type `&'static ValueType`
+///
+/// Where `Name` is the name of the singleton, `key` is the key value, and `KeyType` is the type of
+/// keys.
+///
+/// The storage class is separate to the value type since they have different representations in the
+/// store and slightly different APIs (e.g., whether mutable access is supported or access by cloning
+/// or copying a shared reference).
 #[macro_export]
 macro_rules! singleton {
     ($name: ident ($key: expr, $key_ty: ty, u64)) => {
@@ -213,10 +227,24 @@ macro_rules! match_helper_rhs_mut {
     };
 }
 
-/// Declare the tables in a key/value store.
+/// Declare the tables in a key/value store. Generates the store itself with the specified tables.
 ///
-/// Generates the store itself with the specified tables. Use with an empty body to generate a store
+/// The syntax is `tables!(Name(KeyType, ValueType),*)`, where `Name` is an identifier to name
+/// the table, and `KeyType` and `ValueType` are types. `Name` is used as a type argument to
+/// KvStore methods to identify the table. Use with an empty list of tables to generate a store
 /// for use only with singleton key/value pairs.
+///
+/// # Example:
+///
+/// ```rust
+/// # use ts_kvstore::tables;
+/// # pub struct Node;
+/// # pub trait Edge {}
+/// tables!(
+///   Nodes(&'static str, Node),
+///   Edges(u32, Box<dyn Edge + Send + Sync>)
+/// );
+/// ```
 #[macro_export]
 macro_rules! tables {
     ($($name: ident ($key_ty: ty, $value_ty: ty)),*) => {

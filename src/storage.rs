@@ -76,10 +76,18 @@ pub enum SinValue {
 /// Tabular data in the KV store, there will be one of these for each logical table in the storage
 /// implementing `TableStorage` in [`Storage`].
 #[doc(hidden)]
-#[derive(Default)]
 pub struct Table<D: schema::DataDesc> {
     /// Owner of the table.
     pub(crate) owner: Option<Owner>,
     /// KV data.
     pub(crate) data: HashMap<D::Key, D::Value>,
+}
+
+impl<D: schema::DataDesc> Default for Table<D> {
+    fn default() -> Self {
+        Self {
+            owner: None,
+            data: HashMap::new(),
+        }
+    }
 }

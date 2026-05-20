@@ -123,11 +123,6 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
 /// for a store.
 pub type Owner = &'static str;
 
-#[track_caller]
-fn assert_owner(_owner: Owner) {
-    todo!()
-}
-
 /// An error from a [`KvStore`].
 #[derive(Debug, Clone)]
 pub enum Error {

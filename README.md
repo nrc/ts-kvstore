@@ -12,7 +12,6 @@ TODO
 - refactor
   - use Arc rather than Pin and unsafe for iterator? (only works with Tokio's RwLock)
   - general re-org stuff
-- check ownership
 - transactional API
   - docs
   - check

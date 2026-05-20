@@ -2,7 +2,7 @@
 
 use crate::{
     Error, KvStore, Owner, Result, TableIterator, schema,
-    singleton::OptSingletonValue,
+    singleton::{OptSingletonValue, assert_owner},
     storage::{SinValue, Storage},
 };
 use std::{
@@ -84,8 +84,10 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     where
         D::Value: Clone,
     {
-        self.guard
-            .get_singleton_value::<D>()
+        let storage = &self.guard;
+        let key = storage.hash_for_type::<D>();
+        storage
+            .get_singleton_value(key)
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -93,8 +95,10 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     ///
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
     pub fn get_arc<D: schema::ArcSingleton>(&self) -> Option<Arc<D::Value>> {
-        self.guard
-            .get_singleton_value::<D>()
+        let storage = &self.guard;
+        let key = storage.hash_for_type::<D>();
+        storage
+            .get_singleton_value(key)
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -102,8 +106,10 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn with<D: schema::Singleton, T>(&self, f: impl FnOnce(&D::Value) -> T) -> Option<T> {
-        self.guard
-            .get_singleton_value::<D>()
+        let storage = &self.guard;
+        let key = storage.hash_for_type::<D>();
+        storage
+            .get_singleton_value(key)
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
@@ -114,6 +120,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     pub fn insert<D: schema::Singleton>(&mut self, value: D::ArgValue) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
         let key = storage.hash_for_type::<D>();
+        assert_owner(self.owner, key, storage);
         storage
             .singletons
             .insert(key, (self.owner, D::to_value(value)))
@@ -127,8 +134,11 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
         &mut self,
         mut f: impl FnMut(&mut D::Value) -> T,
     ) -> Option<T> {
-        self.guard
-            .get_singleton_value_mut::<D>()
+        let storage = &mut self.guard;
+        let key = storage.hash_for_type::<D>();
+        assert_owner(self.owner, key, storage);
+        storage
+            .get_singleton_value_mut(key)
             .map_singleton_value(|v| f(D::from_value_mut(v)))
     }
 
@@ -138,6 +148,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     pub fn remove<D: schema::Singleton>(&mut self) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
         let key = storage.hash_for_type::<D>();
+        assert_owner(self.owner, key, storage);
         storage
             .singletons
             .remove(&key)
@@ -152,6 +163,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     pub fn clear<D: schema::Singleton>(&mut self) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
         let key = storage.hash_for_type::<D>();
+        assert_owner(self.owner, key, storage);
         storage
             .singletons
             .insert(key, (self.owner, SinValue::None))
@@ -213,6 +225,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     pub fn clear(&mut self) {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_or_set_owner(self.txn.owner);
         table.data.clear();
     }
 
@@ -275,6 +288,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     pub fn insert(&mut self, key: D::Key, value: D::Value) -> Option<D::Value> {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_or_set_owner(self.txn.owner);
         table.data.insert(key, value)
     }
 
@@ -288,6 +302,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_owner(self.txn.owner);
         let value = table.data.get_mut(key)?;
 
         Some(f(value))
@@ -303,6 +318,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_owner(self.txn.owner);
         table.data.remove(key.borrow())
     }
 }
@@ -331,8 +347,10 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     where
         D::Value: Clone,
     {
-        self.guard
-            .get_singleton_value::<D>()
+        let storage = &self.guard;
+        let key = storage.hash_for_type::<D>();
+        storage
+            .get_singleton_value(key)
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -340,8 +358,10 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     ///
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
     pub fn get_arc<D: schema::ArcSingleton>(&self) -> Option<Arc<D::Value>> {
-        self.guard
-            .get_singleton_value::<D>()
+        let storage = &self.guard;
+        let key = storage.hash_for_type::<D>();
+        storage
+            .get_singleton_value(key)
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -349,8 +369,10 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn with<D: schema::Singleton, T>(&self, f: impl FnOnce(&D::Value) -> T) -> Option<T> {
-        self.guard
-            .get_singleton_value::<D>()
+        let storage = &self.guard;
+        let key = storage.hash_for_type::<D>();
+        storage
+            .get_singleton_value(key)
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 

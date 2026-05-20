@@ -37,15 +37,19 @@ impl<TableStorage: schema::GeneratedStorage> Storage<TableStorage> {
     }
 
     /// Retrive a singleton value and its owner from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value<T: Any>(&self) -> Option<&(Owner, SinValue)> {
-        self.singletons.get(&self.hash_for_type::<T>())
+    pub(crate) fn get_singleton_value(&self, hash: u64) -> Option<&(Owner, SinValue)> {
+        self.singletons.get(&hash)
     }
 
     /// Retrive a singleton value and its owner from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value_mut<T: Any>(&mut self) -> Option<(&Owner, &mut SinValue)> {
+    pub(crate) fn get_singleton_value_mut(&mut self, hash: u64) -> Option<(&Owner, &mut SinValue)> {
         self.singletons
-            .get_mut(&self.hash_for_type::<T>())
+            .get_mut(&hash)
             .map(|&mut (ref o, ref mut v)| (o, v))
+    }
+
+    pub(crate) fn get_singleton_owner(&self, hash: u64) -> Option<Owner> {
+        self.singletons.get(&hash).map(|(o, _)| *o)
     }
 }
 
@@ -82,6 +86,29 @@ impl<D: schema::TableDesc> Default for Table<D> {
         Self {
             owner: None,
             data: HashMap::new(),
+        }
+    }
+}
+
+impl<D: schema::TableDesc> Table<D> {
+    pub fn assert_or_set_owner(&mut self, owner: Owner) {
+        match &self.owner {
+            Some(prev_owner) => debug_assert_eq!(
+                *prev_owner, owner,
+                "Ownership violation: expected {prev_owner}, found {owner}"
+            ),
+            None => {
+                self.owner = Some(owner);
+            }
+        }
+    }
+
+    pub fn assert_owner(&mut self, owner: Owner) {
+        if let Some(prev_owner) = &self.owner {
+            debug_assert_eq!(
+                *prev_owner, owner,
+                "Ownership violation: expected {prev_owner}, found {owner}"
+            );
         }
     }
 }

@@ -1,7 +1,10 @@
 //! KvStore non-transactional API.
 
 use crate::{
-    Error, KvStore, Owner, Result, iter::TableIterator, schema, singleton::OptSingletonValue,
+    Error, KvStore, Owner, Result,
+    iter::TableIterator,
+    schema,
+    singleton::{OptSingletonValue, assert_owner},
     storage::SinValue,
 };
 use std::{
@@ -20,8 +23,9 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         D::Value: Clone,
     {
         let storage = self.storage.read().unwrap();
+        let key = storage.hash_for_type::<D>();
         storage
-            .get_singleton_value::<D>()
+            .get_singleton_value(key)
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -30,8 +34,9 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
     pub fn get_arc<D: schema::ArcSingleton>(&self, _owner: Owner) -> Option<Arc<D::Value>> {
         let storage = self.storage.read().unwrap();
+        let key = storage.hash_for_type::<D>();
         storage
-            .get_singleton_value::<D>()
+            .get_singleton_value(key)
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -44,8 +49,9 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         f: impl FnOnce(&D::Value) -> T,
     ) -> Option<T> {
         let storage = self.storage.read().unwrap();
+        let key = storage.hash_for_type::<D>();
         storage
-            .get_singleton_value::<D>()
+            .get_singleton_value(key)
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
@@ -60,6 +66,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     ) -> Option<D::ArgValue> {
         let mut storage = self.storage.write().unwrap();
         let key = storage.hash_for_type::<D>();
+        assert_owner(owner, key, &storage);
         storage
             .singletons
             .insert(key, (owner, D::to_value(value)))
@@ -71,21 +78,24 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn mutate<D: schema::MutSingleton, T>(
         &self,
-        _owner: Owner,
+        owner: Owner,
         mut f: impl FnMut(&mut D::Value) -> T,
     ) -> Option<T> {
         let mut storage = self.storage.write().unwrap();
+        let key = storage.hash_for_type::<D>();
+        assert_owner(owner, key, &storage);
         storage
-            .get_singleton_value_mut::<D>()
+            .get_singleton_value_mut(key)
             .map_singleton_value(|v| f(D::from_value_mut(v)))
     }
 
     /// Remove a single value from the store.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
-    pub fn remove<D: schema::Singleton>(&self, _owner: Owner) -> Option<D::ArgValue> {
+    pub fn remove<D: schema::Singleton>(&self, owner: Owner) -> Option<D::ArgValue> {
         let mut storage = self.storage.write().unwrap();
         let key = storage.hash_for_type::<D>();
+        assert_owner(owner, key, &storage);
         storage
             .singletons
             .remove(&key)
@@ -100,6 +110,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     pub fn clear<D: schema::Singleton>(&self, owner: Owner) -> Option<D::ArgValue> {
         let mut storage = self.storage.write().unwrap();
         let key = storage.hash_for_type::<D>();
+        assert_owner(owner, key, &storage);
         storage
             .singletons
             .insert(key, (owner, SinValue::None))
@@ -164,6 +175,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     pub fn clear(&self) {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_or_set_owner(self.owner);
         table.data.clear();
     }
 
@@ -226,6 +238,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     pub fn insert(&self, key: D::Key, value: D::Value) -> Option<D::Value> {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_or_set_owner(self.owner);
         table.data.insert(key, value)
     }
 
@@ -239,6 +252,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_owner(self.owner);
         let value = table.data.get_mut(key)?;
 
         Some(f(value))
@@ -254,6 +268,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_owner(self.owner);
         table.data.remove(key.borrow())
     }
 }

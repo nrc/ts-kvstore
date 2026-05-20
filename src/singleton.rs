@@ -1,5 +1,7 @@
 //! Helpers for working with singleton KVs.
 
+use std::any::TypeId;
+
 use crate::{
     Owner,
     storage::{SinValue, Storage},
@@ -45,7 +47,7 @@ impl OptSingletonValue for Option<(Owner, SinValue)> {
 #[track_caller]
 pub fn assert_owner(
     owner: Owner,
-    key: u64,
+    key: &TypeId,
     storage: &Storage<impl crate::schema::GeneratedStorage>,
 ) {
     #[cfg(debug_assertions)]

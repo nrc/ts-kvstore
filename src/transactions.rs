@@ -6,6 +6,7 @@ use crate::{
     storage::{SinValue, Storage},
 };
 use std::{
+    any::TypeId,
     borrow::Borrow,
     hash::Hash,
     marker::PhantomData,
@@ -50,7 +51,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Start a read-only transaction (i.e., only supports non-mutating access to the store, but
     /// all reads are guaranteed to be atomic).
     ///
-    /// Returns `None` if the store's global lock is unavailable for write access.
+    /// Returns `None` if the store's global lock is unavailable for read access.
     pub fn try_begin_ro_transaction(
         &self,
         owner: Owner,
@@ -102,9 +103,9 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
         D::Value: Clone,
     {
         let storage = &self.guard;
-        let key = storage.hash_for_type::<D>();
+        let key = TypeId::of::<D>();
         storage
-            .get_singleton_value(key)
+            .get_singleton_value(&key)
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -113,9 +114,9 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
     pub fn get_arc<D: schema::ArcSingleton>(&self) -> Option<Arc<D::Value>> {
         let storage = &self.guard;
-        let key = storage.hash_for_type::<D>();
+        let key = TypeId::of::<D>();
         storage
-            .get_singleton_value(key)
+            .get_singleton_value(&key)
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -124,9 +125,9 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn with<D: schema::Singleton, T>(&self, f: impl FnOnce(&D::Value) -> T) -> Option<T> {
         let storage = &self.guard;
-        let key = storage.hash_for_type::<D>();
+        let key = TypeId::of::<D>();
         storage
-            .get_singleton_value(key)
+            .get_singleton_value(&key)
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
@@ -136,8 +137,8 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     // Question: do we need separate insert/update/upsert methods?
     pub fn insert<D: schema::Singleton>(&mut self, value: D::ArgValue) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
-        let key = storage.hash_for_type::<D>();
-        assert_owner(self.owner, key, storage);
+        let key = TypeId::of::<D>();
+        assert_owner(self.owner, &key, storage);
         storage
             .singletons
             .insert(key, (self.owner, D::to_value(value)))
@@ -149,13 +150,13 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn mutate<D: schema::MutSingleton, T>(
         &mut self,
-        mut f: impl FnMut(&mut D::Value) -> T,
+        f: impl FnOnce(&mut D::Value) -> T,
     ) -> Option<T> {
         let storage = &mut self.guard;
-        let key = storage.hash_for_type::<D>();
-        assert_owner(self.owner, key, storage);
+        let key = TypeId::of::<D>();
+        assert_owner(self.owner, &key, storage);
         storage
-            .get_singleton_value_mut(key)
+            .get_singleton_value_mut(&key)
             .map_singleton_value(|v| f(D::from_value_mut(v)))
     }
 
@@ -164,8 +165,8 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn remove<D: schema::Singleton>(&mut self) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
-        let key = storage.hash_for_type::<D>();
-        assert_owner(self.owner, key, storage);
+        let key = TypeId::of::<D>();
+        assert_owner(self.owner, &key, storage);
         storage
             .singletons
             .remove(&key)
@@ -179,8 +180,8 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn clear<D: schema::Singleton>(&mut self) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
-        let key = storage.hash_for_type::<D>();
-        assert_owner(self.owner, key, storage);
+        let key = TypeId::of::<D>();
+        assert_owner(self.owner, &key, storage);
         storage
             .singletons
             .insert(key, (self.owner, SinValue::None))
@@ -285,7 +286,7 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
     /// Get immutable access to a row of the table in the store by reference.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn with<Q, T>(&self, f: impl FnOnce(&D::Value) -> T, key: &Q) -> Option<T>
+    pub fn with<Q, T>(&self, key: &Q, f: impl FnOnce(&D::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -310,7 +311,7 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
     /// Get mutable access to a row of the table in the store in the store.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn mutate<Q, T>(&mut self, key: &Q, mut f: impl FnMut(&mut D::Value) -> T) -> Option<T>
+    pub fn mutate<Q, T>(&mut self, key: &Q, f: impl FnOnce(&mut D::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -356,7 +357,7 @@ impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
 /// Create a read-only transaction by calling [`KvStore::begin_ro_transaction`] or [`KvStore::try_begin_ro_transaction`].
 /// A read-only transaction holds a read lock on the whole store while it is active so ensure that
 /// code within a transaction is relatively quick to execute and that you drop transactionss as soon
-/// as possible.
+/// as possible([`RoTransaction::commit`] can be used for this)..
 ///
 /// A transaction must not be kept alive over an `await` point. This can lead to deadlock.
 pub struct RoTransaction<'a, TableStorage: schema::GeneratedStorage> {
@@ -365,6 +366,16 @@ pub struct RoTransaction<'a, TableStorage: schema::GeneratedStorage> {
 }
 
 impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
+    /// Commit this transaction.
+    ///
+    /// This simply moves and drops the `RoTransaction` object. It is optional to call and currently
+    /// always succeeds. You can use this method to release the transaction's lock on the store
+    /// without needing an explicit scope.
+    pub fn commit(self) -> Result<()> {
+        // drop `self` to release the lock.
+        Ok(())
+    }
+
     /// Get a single value from the store by cloning the value.
     ///
     /// Returns `None` if there is no value for the specified key.
@@ -373,9 +384,9 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
         D::Value: Clone,
     {
         let storage = &self.guard;
-        let key = storage.hash_for_type::<D>();
+        let key = TypeId::of::<D>();
         storage
-            .get_singleton_value(key)
+            .get_singleton_value(&key)
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -384,9 +395,9 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
     pub fn get_arc<D: schema::ArcSingleton>(&self) -> Option<Arc<D::Value>> {
         let storage = &self.guard;
-        let key = storage.hash_for_type::<D>();
+        let key = TypeId::of::<D>();
         storage
-            .get_singleton_value(key)
+            .get_singleton_value(&key)
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -395,9 +406,9 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn with<D: schema::Singleton, T>(&self, f: impl FnOnce(&D::Value) -> T) -> Option<T> {
         let storage = &self.guard;
-        let key = storage.hash_for_type::<D>();
+        let key = TypeId::of::<D>();
         storage
-            .get_singleton_value(key)
+            .get_singleton_value(&key)
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
@@ -471,7 +482,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     /// Get immutable access to a row of the table in the store by reference.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn with<Q, T>(&self, f: impl FnOnce(&D::Value) -> T, key: &Q) -> Option<T>
+    pub fn with<Q, T>(&self, key: &Q, f: impl FnOnce(&D::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
@@ -855,12 +866,9 @@ mod test {
         let mut txn = store.begin_transaction(OWNER);
         let table = txn.table::<Items>();
         let mut called = false;
-        let result = table.with(
-            |_| {
-                called = true;
-            },
-            "missing",
-        );
+        let result = table.with("missing", |_| {
+            called = true;
+        });
         assert!(result.is_none());
         assert!(!called);
     }
@@ -871,7 +879,7 @@ mod test {
         let mut txn = store.begin_transaction(OWNER);
         let mut table = txn.table::<Items>();
         table.insert("k", "val".to_owned());
-        assert_eq!(table.with(|s| s.len(), "k"), Some(3));
+        assert_eq!(table.with("k", |s| s.len()), Some(3));
     }
 
     #[test]
@@ -1077,12 +1085,9 @@ mod test {
         let txn = store.begin_ro_transaction(OWNER);
         let table = txn.table::<Items>();
         let mut called = false;
-        let result = table.with(
-            |_| {
-                called = true;
-            },
-            "missing",
-        );
+        let result = table.with("missing", |_| {
+            called = true;
+        });
         assert!(result.is_none());
         assert!(!called);
     }
@@ -1093,7 +1098,7 @@ mod test {
         store.table::<Items>(OWNER).insert("k", "val".to_owned());
         let txn = store.begin_ro_transaction(OWNER);
         let table = txn.table::<Items>();
-        assert_eq!(table.with(|s| s.len(), "k"), Some(3));
+        assert_eq!(table.with("k", |s| s.len()), Some(3));
     }
 
     #[test]

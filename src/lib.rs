@@ -79,15 +79,13 @@
 //! for documentation.
 //!
 //! The implementation of storage for tabular data is one HashMap per table, and otherwise
-//! straighforward. For singleton data, we use a single HashMap which maps `u64` to `(Owner, SinValue)`.
-//! The internal key type is the hash of the external key (i.e., keys are hashed outside of the
-//! underlying HashMap). External values can be stored in different ways (inline, via an `Arc`, etc.)
-//! each of which is a variant of `SinValue`. The store transparently converts keys and values to
-//! their declared types.
+//! straighforward. For singleton data, we use a single HashMap which maps `TypeId` to `(Owner, SinValue)`.
+//! Where the `TypeId` id the id of the type used to describe the singleton. Values can be
+//! stored in different ways (inline, via an `Arc`, etc.) each of which is a variant of `SinValue`.
+//! The store transparently converts keys and values to their declared types.
 
 use std::sync::RwLock;
 
-mod hasher;
 mod iter;
 mod raw;
 #[doc(hidden)]
@@ -124,12 +122,11 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
 pub type Owner = &'static str;
 
 /// An error from a [`KvStore`].
+// TODO derive(Error)
 #[derive(Debug, Clone)]
 pub enum Error {
     /// A table was expected to not be initialized, but was by the specifed `Owner`.
     AlreadyInit(Owner),
-    /// A key was expected to be present in the store, but was not.
-    NotPresent,
 }
 
 /// `Result` alias for a KvStore [`Error`].

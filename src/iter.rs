@@ -54,7 +54,7 @@ impl<
         let tables: *const _ = &result.guard.tables;
         // SAFETY: here we're extending the lifetime of the reference to the KV storage to `'static`.
         // We can't use a raw pointer because we won't be able to use that as input to create an
-        // iterator. To ensure safety we must ensure that `self.inner` outlives `self.inner`.
+        // iterator. To ensure safety we must ensure that `self.guard` outlives `self.inner`.
         let tables = unsafe { tables.as_ref_unchecked() };
         result.inner = Some(D::get_table(tables).data.iter());
         Box::into_pin(result)

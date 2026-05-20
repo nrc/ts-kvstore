@@ -2,19 +2,15 @@ use crate::{Owner, schema};
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    hash::{BuildHasher, RandomState},
     sync::Arc,
 };
 
 /// Where we store the data.
 #[doc(hidden)]
 pub struct Storage<TableStorage: schema::GeneratedStorage> {
-    /// Singleton key/value pairs. Hashing of keys is done 'externally', so the key in the table
-    /// is the result of hashing. We use `NoopU64Builder` to avoid re-hashing. See [`SinValue`] for
+    /// The key is the TypeId of the generated marker type for the KV data. See [`SinValue`] for
     /// how values are represented in the store.
-    pub(crate) singletons: HashMap<u64, (Owner, SinValue), crate::hasher::NoopU64Builder>,
-    /// Used to build a hasher to hash singleton keys.
-    singleton_hash_builder: RandomState,
+    pub(crate) singletons: HashMap<TypeId, (Owner, SinValue)>,
     /// Storage for tabular data. The concrete type will be macro-generated, see the [`crate::schema`]
     /// module.
     pub(crate) tables: TableStorage,
@@ -25,31 +21,25 @@ impl<TableStorage: schema::GeneratedStorage> Storage<TableStorage> {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Storage {
-            singletons: HashMap::with_hasher(crate::hasher::NoopU64Builder),
-            singleton_hash_builder: RandomState::new(),
+            singletons: HashMap::new(),
             tables: TableStorage::default(),
         }
     }
 
-    /// Hash a singleton key.
-    pub(crate) fn hash_for_type<T: Any>(&self) -> u64 {
-        self.singleton_hash_builder.hash_one(TypeId::of::<T>())
+    /// Retrieve a singleton value from the store using the given type-key.
+    pub(crate) fn get_singleton_value(&self, key: &TypeId) -> Option<&SinValue> {
+        self.singletons.get(key).map(|(_, v)| v)
     }
 
-    /// Retrive a singleton value from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value(&self, hash: u64) -> Option<&SinValue> {
-        self.singletons.get(&hash).map(|(_, v)| v)
+    /// Retrieve a singleton value from the store using the given type-key.
+    pub(crate) fn get_singleton_value_mut(&mut self, key: &TypeId) -> Option<&mut SinValue> {
+        self.singletons.get_mut(key).map(|&mut (_, ref mut v)| v)
     }
 
-    /// Retrive a singleton value from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value_mut(&mut self, hash: u64) -> Option<&mut SinValue> {
-        self.singletons.get_mut(&hash).map(|&mut (_, ref mut v)| v)
-    }
-
-    /// Retrieve the owner of a singleton KV pair using the given pre-hashed key.
-    #[allow(dead_code)]
-    pub(crate) fn get_singleton_owner(&self, hash: u64) -> Option<Owner> {
-        self.singletons.get(&hash).map(|(o, _)| *o)
+    /// Retrieve the owner of a singleton KV pair using the given type-key.
+    #[cfg(debug_assertions)]
+    pub(crate) fn get_singleton_owner(&self, key: &TypeId) -> Option<Owner> {
+        self.singletons.get(key).map(|(o, _)| *o)
     }
 }
 

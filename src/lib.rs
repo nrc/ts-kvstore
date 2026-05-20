@@ -86,6 +86,7 @@
 
 use std::sync::RwLock;
 
+mod index;
 mod iter;
 mod raw;
 #[doc(hidden)]

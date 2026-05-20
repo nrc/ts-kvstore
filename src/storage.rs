@@ -64,23 +64,25 @@ pub enum SinValue {
 /// Tabular data in the KV store, there will be one of these for each logical table in the storage
 /// implementing `TableStorage` in [`Storage`].
 #[doc(hidden)]
-pub struct Table<D: schema::TableDesc> {
+pub struct Table<D: schema::TableDesc, I: Default> {
     /// Owner of the table.
     pub(crate) owner: Option<Owner>,
     /// KV data.
     pub(crate) data: HashMap<D::Key, D::Value>,
+    pub(crate) indexes: I,
 }
 
-impl<D: schema::TableDesc> Default for Table<D> {
+impl<D: schema::TableDesc, I: Default> Default for Table<D, I> {
     fn default() -> Self {
         Self {
             owner: None,
             data: HashMap::new(),
+            indexes: I::default(),
         }
     }
 }
 
-impl<D: schema::TableDesc> Table<D> {
+impl<D: schema::TableDesc, I: Default> Table<D, I> {
     pub fn assert_or_set_owner(&mut self, owner: Owner) {
         match &self.owner {
             Some(prev_owner) => debug_assert_eq!(

@@ -50,13 +50,36 @@ pub trait TableDesc: Sized {
     type Key: Hash + Eq;
     /// The type of the value.
     type Value: Any + Send + Sync;
-    /// The name of the table.
-    const NAME: &'static str;
     /// The storage for the table.
     type Storage: GeneratedStorage;
+    type Indexes: IndexStorage<Self::Key, Self::Value>;
 
-    fn get_table(storage: &Self::Storage) -> &Table<Self>;
-    fn get_table_mut(storage: &mut Self::Storage) -> &mut Table<Self>;
+    fn get_table(storage: &Self::Storage) -> &Table<Self, Self::Indexes>;
+    fn get_table_mut(storage: &mut Self::Storage) -> &mut Table<Self, Self::Indexes>;
+}
+
+pub trait IndexDesc: TableDesc {
+    type BaseTable: TableDesc<Storage = Self::Storage>;
+}
+
+pub trait IndexStorage<K: Hash + Eq, V: Any + Send + Sync>: Default {
+    fn clear(&mut self);
+    fn on_insert<Q>(&mut self, key: &Q, value: &V)
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: ?Sized + std::hash::Hash + Eq + std::borrow::ToOwned<Owned = K>;
+    fn on_remove(&mut self, value: &V);
+}
+
+impl<K: Hash + Eq, V: Any + Send + Sync> IndexStorage<K, V> for () {
+    fn clear(&mut self) {}
+    fn on_insert<Q>(&mut self, _key: &Q, _value: &V)
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: ?Sized + std::hash::Hash + Eq,
+    {
+    }
+    fn on_remove(&mut self, _value: &V) {}
 }
 
 /// Marker trait to indicate a storage implementation.
@@ -237,7 +260,7 @@ macro_rules! match_helper_rhs_mut {
 /// ```
 #[macro_export]
 macro_rules! tables {
-    ($($name: ident ($key_ty: ty => $value_ty: ty)),*) => {
+    ($($name: ident ($key_ty: ty => $value_ty: ty $(; index($field: ident: $field_ty: ty))*)),*) => {
         $(
             /// Describes a table in the KV store.
             #[derive(Default)]
@@ -246,25 +269,87 @@ macro_rules! tables {
             impl $crate::schema::TableDesc for $name {
                 type Key = $key_ty;
                 type Value = $value_ty;
-                const NAME: &'static str = stringify!($name);
                 type Storage = TableStorage;
+                type Indexes = indexes::$name::Indexes;
 
-                fn get_table(storage: &TableStorage) -> &$crate::storage::Table<Self> {
+                fn get_table(storage: &TableStorage) -> &$crate::storage::Table<Self, Self::Indexes> {
                     &storage.$name
                 }
-                fn get_table_mut(storage: &mut TableStorage) -> &mut $crate::storage::Table<Self> {
+                fn get_table_mut(storage: &mut TableStorage) -> &mut $crate::storage::Table<Self, Self::Indexes> {
                     &mut storage.$name
                 }
             }
+
+            $(
+                impl $crate::schema::TableDesc for indexes::$name::$field {
+                    type Key = $field_ty;
+                    type Value = $key_ty;
+                    type Storage = TableStorage;
+                    type Indexes = ();
+
+                    fn get_table(storage: &TableStorage) -> &$crate::storage::Table<Self, Self::Indexes> {
+                        &storage.$name.indexes.$field
+                    }
+                    fn get_table_mut(storage: &mut TableStorage) -> &mut $crate::storage::Table<Self, Self::Indexes> {
+                        &mut storage.$name.indexes.$field
+                    }
+                }
+
+                impl $crate::schema::IndexDesc for indexes::$name::$field {
+                    type BaseTable = $name;
+                }
+            )*
         )*
 
         /// Macro-generated storage for all tabular data.
         #[derive(Default)]
         #[allow(non_snake_case)]
         pub struct TableStorage {
-            $($name: $crate::storage::Table<$name>),*
+            $($name: $crate::storage::Table<$name, indexes::$name::Indexes>),*
         }
         impl $crate::schema::GeneratedStorage for TableStorage {}
+
+        pub mod indexes {
+            $(
+                #[allow(non_snake_case)]
+                pub mod $name {
+                    $(
+                        #[allow(non_camel_case_types)]
+                        pub struct $field;
+                    )*
+
+                    #[derive(Default)]
+                    pub struct Indexes {
+                        $(
+                            pub $field: $crate::storage::Table<$field, ()>,
+                        )*
+                    }
+                }
+            )*
+        }
+
+        $(
+            impl $crate::schema::IndexStorage<$key_ty, $value_ty> for indexes::$name::Indexes {
+                fn clear(&mut self) {
+                    $(
+                        self.$field.data.clear();
+                    )*
+                }
+
+                fn on_insert<Q>(&mut self, _key: &Q, _value: &$value_ty) where $key_ty: std::borrow::Borrow<Q>,
+        Q: ?Sized + std::hash::Hash + Eq + std::borrow::ToOwned<Owned = $key_ty> {
+                    $(
+                        self.$field.data.insert(_value.$field.clone(), _key.to_owned());
+                    )*
+                }
+
+                fn on_remove(&mut self, _value: &$value_ty) {
+                    $(
+                        self.$field.data.remove(&_value.$field);
+                    )*
+                }
+            }
+        )*
 
         /// A key-value store.
         ///
@@ -330,5 +415,27 @@ mod test {
             store.table::<Bar>("owner").get(&5).unwrap(),
             vec!["boo".to_owned(), "bang".to_owned()]
         );
+    }
+
+    #[test]
+    fn table_with_indexes() {
+        #[derive(Clone, Debug)]
+        pub struct BarT {
+            a: String,
+        }
+        tables!(Foo(&'static str => String), Bar(u32 => BarT; index(a: String)));
+
+        let store = KvStore::new();
+        store.table::<Bar>("owner").insert(
+            5,
+            BarT {
+                a: "hello".to_owned(),
+            },
+        );
+        let value = store
+            .table_by::<indexes::Bar::a>("owner")
+            .get("hello")
+            .unwrap();
+        assert_eq!(value.a, "hello")
     }
 }

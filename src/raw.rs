@@ -2,8 +2,9 @@
 
 use crate::{
     Error, KvStore, Owner, Result,
+    index::KvTableIndex,
     iter::TableIterator,
-    schema,
+    schema::{self, IndexStorage},
     singleton::{OptSingletonValue, assert_owner},
     storage::SinValue,
 };
@@ -134,6 +135,18 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
             table: PhantomData,
         }
     }
+
+    pub fn table_by<'a, D: schema::IndexDesc<Storage = TableStorage>>(
+        &'a self,
+        owner: Owner,
+    ) -> KvTableIndex<'a, TableStorage, D, D::BaseTable> {
+        KvTableIndex {
+            store: self,
+            owner,
+            index: PhantomData,
+            base: PhantomData,
+        }
+    }
 }
 
 /// Abstracts a table of key/values pairs in the store.
@@ -172,14 +185,6 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         }
     }
 
-    /// Clear a table by removing all its KVs, but preserving ownership.
-    pub fn clear(&self) {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.assert_or_set_owner(self.owner);
-        table.data.clear();
-    }
-
     /// Iterate all the key/value pairs in a table.
     pub fn iter(&'a self) -> impl Iterator<Item = (&'a D::Key, &'a D::Value)>
     where
@@ -188,6 +193,14 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     {
         let guard = self.store.storage.read().unwrap();
         TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D>::new(guard)
+    }
+
+    /// Clear a table by removing all its KVs, but preserving ownership.
+    pub fn clear(&self) {
+        let mut storage = self.store.storage.write().unwrap();
+        let table = D::get_table_mut(&mut storage.tables);
+        table.assert_or_set_owner(self.owner);
+        table.data.clear();
     }
 
     /// The number of key/value pairs in the table.
@@ -236,10 +249,14 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     /// Insert a value into the table.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
-    pub fn insert(&self, key: D::Key, value: D::Value) -> Option<D::Value> {
+    pub fn insert(&self, key: D::Key, value: D::Value) -> Option<D::Value>
+    where
+        D::Key: Clone,
+    {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_or_set_owner(self.owner);
+        table.indexes.on_insert(&key, &value);
         table.data.insert(key, value)
     }
 
@@ -249,14 +266,18 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     pub fn mutate<Q, T>(&self, key: &Q, f: impl FnOnce(&mut D::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
+        Q: ?Sized + Hash + Eq + ToOwned<Owned = D::Key>,
     {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_owner(self.owner);
         let value = table.data.get_mut(key)?;
 
-        Some(f(value))
+        table.indexes.on_remove(value);
+        let result = f(value);
+        table.indexes.on_insert(key, value);
+
+        Some(result)
     }
 
     /// Remove a row from the table.
@@ -270,7 +291,9 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_owner(self.owner);
-        table.data.remove(key.borrow())
+        let value = table.data.remove(key.borrow())?;
+        table.indexes.on_remove(&value);
+        Some(value)
     }
 }
 
@@ -640,7 +663,7 @@ mod test {
         assert!(
             store
                 .table::<Items>(OWNER)
-                .mutate("missing", |v| v.len())
+                .mutate(&"missing", |v| v.len())
                 .is_none()
         );
     }
@@ -649,7 +672,7 @@ mod test {
     fn table_mutate_modifies_value() {
         let store = KvStore::new();
         store.table::<Items>(OWNER).insert("k", "hello".to_owned());
-        store.table::<Items>(OWNER).mutate("k", |v| v.push('!'));
+        store.table::<Items>(OWNER).mutate(&"k", |v| v.push('!'));
         assert_eq!(
             store.table::<Items>(OWNER).get("k"),
             Some("hello!".to_owned())
@@ -767,7 +790,7 @@ mod test {
         let store = KvStore::new();
         let table = store.table::<Items>(OWNER);
         table.insert("k", "v1".to_owned());
-        table.mutate("k", |v| {
+        table.mutate(&"k", |v| {
             v.clear();
             v.push_str("v2");
         });
@@ -790,7 +813,7 @@ mod test {
     fn table_mutate_wrong_owner_panics() {
         let store = KvStore::new();
         store.table::<Items>(OWNER).init().unwrap();
-        store.table::<Items>(OTHER).mutate("k", |v| v.len());
+        store.table::<Items>(OTHER).mutate(&"k", |v| v.len());
     }
 
     #[test]

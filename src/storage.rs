@@ -36,16 +36,14 @@ impl<TableStorage: schema::GeneratedStorage> Storage<TableStorage> {
         self.singleton_hash_builder.hash_one(TypeId::of::<T>())
     }
 
-    /// Retrive a singleton value and its owner from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value(&self, hash: u64) -> Option<&(Owner, SinValue)> {
-        self.singletons.get(&hash)
+    /// Retrive a singleton value from the store using the given pre-hashed key.
+    pub(crate) fn get_singleton_value(&self, hash: u64) -> Option<&SinValue> {
+        self.singletons.get(&hash).map(|(_, v)| v)
     }
 
-    /// Retrive a singleton value and its owner from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value_mut(&mut self, hash: u64) -> Option<(&Owner, &mut SinValue)> {
-        self.singletons
-            .get_mut(&hash)
-            .map(|&mut (ref o, ref mut v)| (o, v))
+    /// Retrive a singleton value from the store using the given pre-hashed key.
+    pub(crate) fn get_singleton_value_mut(&mut self, hash: u64) -> Option<&mut SinValue> {
+        self.singletons.get_mut(&hash).map(|&mut (_, ref mut v)| v)
     }
 
     /// Retrieve the owner of a singleton KV pair using the given pre-hashed key.

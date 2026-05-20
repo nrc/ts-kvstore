@@ -11,22 +11,22 @@ pub trait OptSingletonValue {
     fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T>;
 }
 
-impl<'a> OptSingletonValue for Option<&'a (Owner, SinValue)> {
+impl<'a> OptSingletonValue for Option<&'a SinValue> {
     type Value = &'a SinValue;
     fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T> {
         match self? {
-            (_, SinValue::None) => None,
-            (_, v) => Some(f(v)),
+            SinValue::None => None,
+            v => Some(f(v)),
         }
     }
 }
 
-impl<'a> OptSingletonValue for Option<(&'a Owner, &'a mut SinValue)> {
+impl<'a> OptSingletonValue for Option<&'a mut SinValue> {
     type Value = &'a mut SinValue;
     fn map_singleton_value<T>(self, f: impl FnOnce(Self::Value) -> T) -> Option<T> {
         match self? {
-            (_, SinValue::None) => None,
-            (_, v) => Some(f(v)),
+            SinValue::None => None,
+            v => Some(f(v)),
         }
     }
 }

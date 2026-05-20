@@ -114,7 +114,7 @@ macro_rules! singleton {
         impl $crate::schema::ArcSingleton for $name {}
     };
     ($name: ident ($value_ty: ty, Ref)) => {
-        singleton!($name($value_ty, &'static $value_ty, Ref))
+        singleton!($name($value_ty, &'static $value_ty, Ref));
     };
     ($name: ident ($value_ty: ty, $arg_value_ty: ty, $variant: ident)) => {
         /// Describes a singleton in the KV store.

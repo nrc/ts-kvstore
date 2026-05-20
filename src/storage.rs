@@ -48,6 +48,8 @@ impl<TableStorage: schema::GeneratedStorage> Storage<TableStorage> {
             .map(|&mut (ref o, ref mut v)| (o, v))
     }
 
+    /// Retrieve the owner of a singleton KV pair using the given pre-hashed key.
+    #[allow(dead_code)]
     pub(crate) fn get_singleton_owner(&self, hash: u64) -> Option<Owner> {
         self.singletons.get(&hash).map(|(o, _)| *o)
     }

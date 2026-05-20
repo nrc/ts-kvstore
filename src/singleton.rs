@@ -41,6 +41,7 @@ impl OptSingletonValue for Option<(Owner, SinValue)> {
     }
 }
 
+#[allow(unused_variables)]
 #[track_caller]
 pub fn assert_owner(
     owner: Owner,

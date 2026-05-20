@@ -46,6 +46,8 @@ mod test {
 
     #[test]
     fn hash_u64() {
+        #![allow(clippy::manual_hash_one)]
+
         let mut hasher = NoopU64Builder.build_hasher();
         42u64.hash(&mut hasher);
         assert_eq!(42, hasher.finish());

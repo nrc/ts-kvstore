@@ -176,9 +176,9 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// ```rust,ignore
     /// let value = store.table(OWNER).get(key).unwrap();
     /// ```
-    pub fn table<D: schema::TableDesc<Storage = TableStorage>>(
-        &'a mut self,
-    ) -> KvTableTransactional<'a, TableStorage, D> {
+    pub fn table<'t, D: schema::TableDesc<Storage = TableStorage>>(
+        &'t mut self,
+    ) -> KvTableTransactional<'a, 't, TableStorage, D> {
         KvTableTransactional {
             txn: self,
             table: PhantomData,
@@ -192,15 +192,16 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
 /// tabular data.
 pub struct KvTableTransactional<
     'a,
+    't,
     TableStorage: schema::GeneratedStorage,
     D: schema::TableDesc<Storage = TableStorage>,
 > {
-    txn: &'a mut Transaction<'a, TableStorage>,
+    txn: &'t mut Transaction<'a, TableStorage>,
     table: PhantomData<D>,
 }
 
-impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = TableStorage>>
-    KvTableTransactional<'a, TableStorage, D>
+impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = TableStorage>>
+    KvTableTransactional<'a, 't, TableStorage, D>
 {
     /// Initialize a table by setting its owner.
     ///
@@ -230,13 +231,13 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     }
 
     /// Iterate all the key/value pairs in a table.
-    pub fn iter(&'a self) -> impl Iterator<Item = (&'a D::Key, &'a D::Value)>
+    pub fn iter<'s>(&'s self) -> impl Iterator<Item = (&'s D::Key, &'s D::Value)> + 's
     where
         TableStorage: 'static,
         D: 'static,
     {
         let guard = &self.txn.guard;
-        TableIterator::<'a, RefWriteGuard<'a, _>, TableStorage, D>::new(RefWriteGuard(guard))
+        TableIterator::<'s, RefWriteGuard<'s, 'a, _>, TableStorage, D>::new(RefWriteGuard(guard))
     }
 
     /// The number of key/value pairs in the table.
@@ -323,9 +324,9 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     }
 }
 
-struct RefWriteGuard<'a, T>(&'a RwLockWriteGuard<'a, T>);
+struct RefWriteGuard<'r, 'a, T>(&'r RwLockWriteGuard<'a, T>);
 
-impl<'a, T> Deref for RefWriteGuard<'a, T> {
+impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -469,5 +470,663 @@ impl<'a, T> Deref for RefReadGuard<'a, T> {
 
     fn deref(&self) -> &Self::Target {
         self.0.deref()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{Error, singleton, tables};
+    use std::any::Any;
+    use std::sync::Arc;
+
+    singleton!(Count(u64));
+    singleton!(Shared(String, Arc));
+
+    tables!(Items(&'static str, String), Counters(u32, u64));
+
+    const OWNER: &str = "owner";
+    #[cfg(debug_assertions)]
+    const OTHER: &str = "other";
+
+    #[test]
+    fn begin_transaction_works() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(42);
+        assert_eq!(txn.get::<Count>(), Some(42));
+    }
+
+    #[test]
+    fn try_begin_transaction_returns_some_when_unlocked() {
+        let store = KvStore::new();
+        assert!(store.try_begin_transaction(OWNER).is_some());
+    }
+
+    #[test]
+    fn begin_ro_transaction_works() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 7);
+        let txn = store.begin_ro_transaction(OWNER);
+        assert_eq!(txn.get::<Count>(), Some(7));
+    }
+
+    #[test]
+    fn try_begin_ro_transaction_returns_some_when_unlocked() {
+        let store = KvStore::new();
+        assert!(store.try_begin_ro_transaction(OWNER).is_some());
+    }
+
+    #[test]
+    fn txn_get_returns_none_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_transaction(OWNER);
+        assert!(txn.get::<Count>().is_none());
+    }
+
+    #[test]
+    fn txn_get_returns_value_inserted_in_same_txn() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(42);
+        assert_eq!(txn.get::<Count>(), Some(42));
+    }
+
+    #[test]
+    fn txn_get_returns_value_inserted_before_txn() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 5);
+        let txn = store.begin_transaction(OWNER);
+        assert_eq!(txn.get::<Count>(), Some(5));
+    }
+
+    #[test]
+    fn txn_get_returns_none_after_clear_in_same_txn() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(1);
+        txn.clear::<Count>();
+        assert!(txn.get::<Count>().is_none());
+    }
+
+    #[test]
+    fn txn_get_arc_returns_none_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_transaction(OWNER);
+        assert!(txn.get_arc::<Shared>().is_none());
+    }
+
+    #[test]
+    fn txn_get_arc_returns_arc_after_insert() {
+        let store = KvStore::new();
+        store.insert::<Shared>(OWNER, Arc::new("hello".to_owned()));
+        let txn = store.begin_transaction(OWNER);
+        let arc = txn.get_arc::<Shared>().unwrap();
+        assert_eq!(*arc, "hello");
+    }
+
+    #[test]
+    fn txn_get_arc_shares_allocation() {
+        let store = KvStore::new();
+        store.insert::<Shared>(OWNER, Arc::new("hello".to_owned()));
+        let txn = store.begin_transaction(OWNER);
+        let arc1 = txn.get_arc::<Shared>().unwrap();
+        let arc2 = txn.get_arc::<Shared>().unwrap();
+        assert!(Arc::ptr_eq(&arc1, &arc2));
+    }
+
+    #[test]
+    fn txn_with_returns_none_and_does_not_call_f_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_transaction(OWNER);
+        let mut called = false;
+        let result = txn.with::<Count, ()>(|_| {
+            called = true;
+        });
+        assert!(result.is_none());
+        assert!(!called);
+    }
+
+    #[test]
+    fn txn_with_returns_result_of_f() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(5);
+        assert_eq!(txn.with::<Count, _>(|v| v * 2), Some(10));
+    }
+
+    #[test]
+    fn txn_insert_returns_none_on_first() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        assert!(txn.insert::<Count>(1).is_none());
+    }
+
+    #[test]
+    fn txn_insert_returns_previous_value() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(1);
+        assert_eq!(txn.insert::<Count>(2), Some(1));
+    }
+
+    #[test]
+    fn txn_insert_over_tombstone_returns_none() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(1);
+        txn.clear::<Count>();
+        assert!(txn.insert::<Count>(2).is_none());
+    }
+
+    #[test]
+    fn txn_mutate_returns_none_and_does_not_call_f_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut called = false;
+        let result = txn.mutate::<Count, ()>(|_| {
+            called = true;
+        });
+        assert!(result.is_none());
+        assert!(!called);
+    }
+
+    #[test]
+    fn txn_mutate_modifies_value_in_place() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(10);
+        assert_eq!(
+            txn.mutate::<Count, _>(|v| {
+                *v += 5;
+                *v
+            }),
+            Some(15)
+        );
+        assert_eq!(txn.get::<Count>(), Some(15));
+    }
+
+    #[test]
+    fn txn_remove_returns_none_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        assert!(txn.remove::<Count>().is_none());
+    }
+
+    #[test]
+    fn txn_remove_returns_previous_value() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(7);
+        assert_eq!(txn.remove::<Count>(), Some(7));
+    }
+
+    #[test]
+    fn txn_remove_makes_get_return_none() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(1);
+        txn.remove::<Count>();
+        assert!(txn.get::<Count>().is_none());
+    }
+
+    #[test]
+    fn txn_clear_returns_none_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        assert!(txn.clear::<Count>().is_none());
+    }
+
+    #[test]
+    fn txn_clear_returns_previous_value() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(3);
+        assert_eq!(txn.clear::<Count>(), Some(3));
+    }
+
+    #[test]
+    fn txn_clear_makes_get_return_none() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(1);
+        txn.clear::<Count>();
+        assert!(txn.get::<Count>().is_none());
+    }
+
+    #[test]
+    fn txn_double_clear_returns_none() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(1);
+        txn.clear::<Count>();
+        assert!(txn.clear::<Count>().is_none());
+    }
+
+    #[test]
+    fn txn_writes_visible_after_drop() {
+        let store = KvStore::new();
+        {
+            let mut txn = store.begin_transaction(OWNER);
+            txn.insert::<Count>(42);
+        }
+        assert_eq!(store.get::<Count>(OWNER), Some(42));
+    }
+
+    #[test]
+    fn txn_table_writes_visible_after_drop() {
+        let store = KvStore::new();
+        {
+            let mut txn = store.begin_transaction(OWNER);
+            txn.table::<Items>().insert("k", "v".to_owned());
+        }
+        assert_eq!(store.table::<Items>(OWNER).get("k"), Some("v".to_owned()));
+    }
+
+    #[test]
+    fn txn_mutate_visible_after_drop() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 1);
+        {
+            let mut txn = store.begin_transaction(OWNER);
+            txn.mutate::<Count, ()>(|v| *v = 100);
+        }
+        assert_eq!(store.get::<Count>(OWNER), Some(100));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_insert_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 1);
+        let mut txn = store.begin_transaction(OTHER);
+        txn.insert::<Count>(5);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_mutate_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 1);
+        let mut txn = store.begin_transaction(OTHER);
+        txn.mutate::<Count, ()>(|_| {});
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_remove_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 1);
+        let mut txn = store.begin_transaction(OTHER);
+        txn.remove::<Count>();
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_clear_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 1);
+        let mut txn = store.begin_transaction(OTHER);
+        txn.clear::<Count>();
+    }
+
+    #[test]
+    fn txn_table_init_succeeds() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        assert!(table.init().is_ok());
+    }
+
+    #[test]
+    fn txn_table_init_second_call_err() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.init().unwrap();
+        let err = table.init().unwrap_err();
+        assert!(matches!(err, Error::AlreadyInit(o) if o == OWNER));
+    }
+
+    #[test]
+    fn txn_table_get_returns_none_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert!(table.get("missing").is_none());
+    }
+
+    #[test]
+    fn txn_table_insert_returns_none_on_first() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        assert!(table.insert("k", "v".to_owned()).is_none());
+    }
+
+    #[test]
+    fn txn_table_insert_returns_previous() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("k", "v1".to_owned());
+        assert_eq!(table.insert("k", "v2".to_owned()), Some("v1".to_owned()));
+    }
+
+    #[test]
+    fn txn_table_get_returns_value_after_insert() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("k", "val".to_owned());
+        assert_eq!(table.get("k"), Some("val".to_owned()));
+    }
+
+    #[test]
+    fn txn_table_with_returns_none_and_does_not_call_f_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let table = txn.table::<Items>();
+        let mut called = false;
+        let result = table.with(
+            |_| {
+                called = true;
+            },
+            "missing",
+        );
+        assert!(result.is_none());
+        assert!(!called);
+    }
+
+    #[test]
+    fn txn_table_with_returns_some_after_insert() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("k", "val".to_owned());
+        assert_eq!(table.with(|s| s.len(), "k"), Some(3));
+    }
+
+    #[test]
+    fn txn_table_mutate_returns_none_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.init().unwrap();
+        assert!(table.mutate("missing", |v| v.len()).is_none());
+    }
+
+    #[test]
+    fn txn_table_mutate_modifies_value() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("k", "hello".to_owned());
+        table.mutate("k", |v| v.push('!'));
+        assert_eq!(table.get("k"), Some("hello!".to_owned()));
+    }
+
+    #[test]
+    fn txn_table_remove_returns_none_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        assert!(table.remove("missing").is_none());
+    }
+
+    #[test]
+    fn txn_table_remove_returns_previous_value() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("k", "v".to_owned());
+        assert_eq!(table.remove("k"), Some("v".to_owned()));
+    }
+
+    #[test]
+    fn txn_table_remove_makes_get_return_none() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("k", "v".to_owned());
+        table.remove("k");
+        assert!(table.get("k").is_none());
+    }
+
+    #[test]
+    fn txn_table_clear_removes_all_rows() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("a", "alpha".to_owned());
+        table.insert("b", "beta".to_owned());
+        table.insert("c", "gamma".to_owned());
+        table.clear();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn txn_table_is_empty_on_fresh_store() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn txn_table_len_reflects_inserts() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("a", "alpha".to_owned());
+        table.insert("b", "beta".to_owned());
+        assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn txn_table_iter_empty() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert_eq!(table.iter().count(), 0);
+    }
+
+    #[test]
+    fn txn_table_iter_yields_inserted_rows() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        let mut table = txn.table::<Items>();
+        table.insert("a", "alpha".to_owned());
+        table.insert("b", "beta".to_owned());
+        let mut items: Vec<_> = table.iter().map(|(&k, v)| (k, v.clone())).collect();
+        items.sort();
+        assert_eq!(
+            items,
+            vec![("a", "alpha".to_owned()), ("b", "beta".to_owned())]
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_table_insert_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).init().unwrap();
+        let mut txn = store.begin_transaction(OTHER);
+        txn.table::<Items>().insert("k", "v".to_owned());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_table_mutate_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).init().unwrap();
+        let mut txn = store.begin_transaction(OTHER);
+        txn.table::<Items>().mutate("k", |v: &mut String| v.len());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_table_remove_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).init().unwrap();
+        let mut txn = store.begin_transaction(OTHER);
+        txn.table::<Items>().remove("k");
+    }
+
+    #[test]
+    fn ro_txn_get_returns_none_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        assert!(txn.get::<Count>().is_none());
+    }
+
+    #[test]
+    fn ro_txn_get_returns_value_inserted_before_txn() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 42);
+        let txn = store.begin_ro_transaction(OWNER);
+        assert_eq!(txn.get::<Count>(), Some(42));
+    }
+
+    #[test]
+    fn ro_txn_get_arc_returns_none_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        assert!(txn.get_arc::<Shared>().is_none());
+    }
+
+    #[test]
+    fn ro_txn_get_arc_returns_arc() {
+        let store = KvStore::new();
+        store.insert::<Shared>(OWNER, Arc::new("hello".to_owned()));
+        let txn = store.begin_ro_transaction(OWNER);
+        let arc = txn.get_arc::<Shared>().unwrap();
+        assert_eq!(*arc, "hello");
+    }
+
+    #[test]
+    fn ro_txn_with_returns_none_and_does_not_call_f_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        let mut called = false;
+        let result = txn.with::<Count, ()>(|_| {
+            called = true;
+        });
+        assert!(result.is_none());
+        assert!(!called);
+    }
+
+    #[test]
+    fn ro_txn_with_returns_some_after_insert() {
+        let store = KvStore::new();
+        store.insert::<Count>(OWNER, 4);
+        let txn = store.begin_ro_transaction(OWNER);
+        assert_eq!(txn.with::<Count, _>(|v| v * 2), Some(8));
+    }
+
+    #[test]
+    fn ro_txn_table_get_returns_none_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert!(table.get("missing").is_none());
+    }
+
+    #[test]
+    fn ro_txn_table_get_returns_value_inserted_before_txn() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).insert("k", "val".to_owned());
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert_eq!(table.get("k"), Some("val".to_owned()));
+    }
+
+    #[test]
+    fn ro_txn_table_with_returns_none_and_does_not_call_f_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        let mut called = false;
+        let result = table.with(
+            |_| {
+                called = true;
+            },
+            "missing",
+        );
+        assert!(result.is_none());
+        assert!(!called);
+    }
+
+    #[test]
+    fn ro_txn_table_with_returns_some() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).insert("k", "val".to_owned());
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert_eq!(table.with(|s| s.len(), "k"), Some(3));
+    }
+
+    #[test]
+    fn ro_txn_table_len_zero_when_empty() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert_eq!(table.len(), 0);
+    }
+
+    #[test]
+    fn ro_txn_table_len_reflects_pre_txn_inserts() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).insert("a", "alpha".to_owned());
+        store.table::<Items>(OWNER).insert("b", "beta".to_owned());
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn ro_txn_table_is_empty_true_when_no_rows() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert!(table.is_empty());
+    }
+
+    #[test]
+    fn ro_txn_table_is_empty_false_after_inserts() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).insert("k", "v".to_owned());
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert!(!table.is_empty());
+    }
+
+    #[test]
+    fn ro_txn_table_iter_empty() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        assert_eq!(table.iter().count(), 0);
+    }
+
+    #[test]
+    fn ro_txn_table_iter_yields_pre_txn_rows() {
+        let store = KvStore::new();
+        store.table::<Items>(OWNER).insert("a", "alpha".to_owned());
+        store.table::<Items>(OWNER).insert("b", "beta".to_owned());
+        let txn = store.begin_ro_transaction(OWNER);
+        let table = txn.table::<Items>();
+        let mut items: Vec<_> = table.iter().map(|(&k, v)| (k, v.clone())).collect();
+        items.sort();
+        assert_eq!(
+            items,
+            vec![("a", "alpha".to_owned()), ("b", "beta".to_owned())]
+        );
     }
 }

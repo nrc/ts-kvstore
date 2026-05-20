@@ -69,7 +69,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     // TODO single-table transactions?
 }
 
-/// TODO docs (no commit)
+/// TODO docs
 // TODO do we need to be able to abort a transaction?
 pub struct Transaction<'a, TableStorage: schema::GeneratedStorage> {
     guard: RwLockWriteGuard<'a, Storage<TableStorage>>,
@@ -77,6 +77,16 @@ pub struct Transaction<'a, TableStorage: schema::GeneratedStorage> {
 }
 
 impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
+    /// Commit this transaction.
+    ///
+    /// This simply moves and drops the `Transaction` object. It is optional to call and currently
+    /// always succeeds. You can use this method to release the transaction's lock on the store
+    /// without needing an explicit scope.
+    pub fn commit(self) -> Result<()> {
+        // drop `self` to release the lock.
+        Ok(())
+    }
+
     /// Get a single value from the store by cloning the value.
     ///
     /// Returns `None` if there is no value for the specified key.
@@ -705,20 +715,20 @@ mod test {
     #[test]
     fn txn_writes_visible_after_drop() {
         let store = KvStore::new();
-        {
-            let mut txn = store.begin_transaction(OWNER);
-            txn.insert::<Count>(42);
-        }
+        let mut txn = store.begin_transaction(OWNER);
+        txn.insert::<Count>(42);
+        txn.commit().unwrap();
+
         assert_eq!(store.get::<Count>(OWNER), Some(42));
     }
 
     #[test]
     fn txn_table_writes_visible_after_drop() {
         let store = KvStore::new();
-        {
-            let mut txn = store.begin_transaction(OWNER);
-            txn.table::<Items>().insert("k", "v".to_owned());
-        }
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table::<Items>().insert("k", "v".to_owned());
+        txn.commit().unwrap();
+
         assert_eq!(store.table::<Items>(OWNER).get("k"), Some("v".to_owned()));
     }
 
@@ -726,10 +736,10 @@ mod test {
     fn txn_mutate_visible_after_drop() {
         let store = KvStore::new();
         store.insert::<Count>(OWNER, 1);
-        {
-            let mut txn = store.begin_transaction(OWNER);
-            txn.mutate::<Count, ()>(|v| *v = 100);
-        }
+        let mut txn = store.begin_transaction(OWNER);
+        txn.mutate::<Count, ()>(|v| *v = 100);
+        txn.commit().unwrap();
+
         assert_eq!(store.get::<Count>(OWNER), Some(100));
     }
 

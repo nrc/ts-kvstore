@@ -21,7 +21,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     {
         let storage = self.storage.read().unwrap();
         storage
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -31,7 +31,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     pub fn get_arc<D: schema::ArcSingleton>(&self, _owner: Owner) -> Option<Arc<D::Value>> {
         let storage = self.storage.read().unwrap();
         storage
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -45,7 +45,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     ) -> Option<T> {
         let storage = self.storage.read().unwrap();
         storage
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
@@ -59,7 +59,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         value: D::ArgValue,
     ) -> Option<D::ArgValue> {
         let mut storage = self.storage.write().unwrap();
-        let key = storage.hash(&D::KEY);
+        let key = storage.hash_for_type::<D>();
         storage
             .singletons
             .insert(key, (owner, D::to_value(value)))
@@ -76,7 +76,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     ) -> Option<T> {
         let mut storage = self.storage.write().unwrap();
         storage
-            .get_singleton_value_mut(&D::KEY)
+            .get_singleton_value_mut::<D>()
             .map_singleton_value(|v| f(D::from_value_mut(v)))
     }
 
@@ -85,7 +85,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn remove<D: schema::Singleton>(&self, _owner: Owner) -> Option<D::ArgValue> {
         let mut storage = self.storage.write().unwrap();
-        let key = storage.hash(&D::KEY);
+        let key = storage.hash_for_type::<D>();
         storage
             .singletons
             .remove(&key)
@@ -99,7 +99,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn clear<D: schema::Singleton>(&self, owner: Owner) -> Option<D::ArgValue> {
         let mut storage = self.storage.write().unwrap();
-        let key = storage.hash(&D::KEY);
+        let key = storage.hash_for_type::<D>();
         storage
             .singletons
             .insert(key, (owner, SinValue::None))
@@ -112,7 +112,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// ```rust,ignore
     /// let value = store.table(OWNER).get(key).unwrap();
     /// ```
-    pub fn table<'a, D: schema::TableDesc<TableStorage>>(
+    pub fn table<'a, D: schema::TableDesc<Storage = TableStorage>>(
         &'a self,
         owner: Owner,
     ) -> KvTable<'a, TableStorage, D> {
@@ -128,13 +128,17 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
 ///
 /// `KvTable` has no transactional semantics and only exists as a convenience for accessing
 /// tabular data.
-pub struct KvTable<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStorage>> {
+pub struct KvTable<
+    'a,
+    TableStorage: schema::GeneratedStorage,
+    D: schema::TableDesc<Storage = TableStorage>,
+> {
     store: &'a KvStore<TableStorage>,
     owner: Owner,
     table: PhantomData<D>,
 }
 
-impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStorage>>
+impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = TableStorage>>
     KvTable<'a, TableStorage, D>
 {
     /// Initialize a table by setting its owner.
@@ -178,6 +182,13 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStora
         let storage = self.store.storage.read().unwrap();
         let table = D::get_table(&storage.tables);
         table.data.len()
+    }
+
+    /// True if the table is empty.
+    pub fn is_empty(&self) -> bool {
+        let storage = self.store.storage.read().unwrap();
+        let table = D::get_table(&storage.tables);
+        table.data.is_empty()
     }
 
     /// Get a row of the table from the store by cloning the value.

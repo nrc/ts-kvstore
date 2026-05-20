@@ -85,7 +85,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
         D::Value: Clone,
     {
         self.guard
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -94,7 +94,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
     pub fn get_arc<D: schema::ArcSingleton>(&self) -> Option<Arc<D::Value>> {
         self.guard
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -103,7 +103,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn with<D: schema::Singleton, T>(&self, f: impl FnOnce(&D::Value) -> T) -> Option<T> {
         self.guard
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
@@ -113,7 +113,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     // Question: do we need separate insert/update/upsert methods?
     pub fn insert<D: schema::Singleton>(&mut self, value: D::ArgValue) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
-        let key = storage.hash(&D::KEY);
+        let key = storage.hash_for_type::<D>();
         storage
             .singletons
             .insert(key, (self.owner, D::to_value(value)))
@@ -128,7 +128,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
         mut f: impl FnMut(&mut D::Value) -> T,
     ) -> Option<T> {
         self.guard
-            .get_singleton_value_mut(&D::KEY)
+            .get_singleton_value_mut::<D>()
             .map_singleton_value(|v| f(D::from_value_mut(v)))
     }
 
@@ -137,7 +137,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn remove<D: schema::Singleton>(&mut self) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
-        let key = storage.hash(&D::KEY);
+        let key = storage.hash_for_type::<D>();
         storage
             .singletons
             .remove(&key)
@@ -151,7 +151,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn clear<D: schema::Singleton>(&mut self) -> Option<D::ArgValue> {
         let storage = &mut self.guard;
-        let key = storage.hash(&D::KEY);
+        let key = storage.hash_for_type::<D>();
         storage
             .singletons
             .insert(key, (self.owner, SinValue::None))
@@ -164,7 +164,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     /// ```rust,ignore
     /// let value = store.table(OWNER).get(key).unwrap();
     /// ```
-    pub fn table<D: schema::TableDesc<TableStorage>>(
+    pub fn table<D: schema::TableDesc<Storage = TableStorage>>(
         &'a mut self,
     ) -> KvTableTransactional<'a, TableStorage, D> {
         KvTableTransactional {
@@ -181,13 +181,13 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
 pub struct KvTableTransactional<
     'a,
     TableStorage: schema::GeneratedStorage,
-    D: schema::TableDesc<TableStorage>,
+    D: schema::TableDesc<Storage = TableStorage>,
 > {
     txn: &'a mut Transaction<'a, TableStorage>,
     table: PhantomData<D>,
 }
 
-impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStorage>>
+impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = TableStorage>>
     KvTableTransactional<'a, TableStorage, D>
 {
     /// Initialize a table by setting its owner.
@@ -231,6 +231,13 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStora
         let storage = &self.txn.guard;
         let table = D::get_table(&storage.tables);
         table.data.len()
+    }
+
+    /// True if the table is empty.
+    pub fn is_empty(&self) -> bool {
+        let storage = &self.txn.guard;
+        let table = D::get_table(&storage.tables);
+        table.data.is_empty()
     }
 
     /// Get a row of the table from the store by cloning the value.
@@ -325,7 +332,7 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
         D::Value: Clone,
     {
         self.guard
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
     }
 
@@ -334,7 +341,7 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
     pub fn get_arc<D: schema::ArcSingleton>(&self) -> Option<Arc<D::Value>> {
         self.guard
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| D::from_value_arc(v))
     }
 
@@ -343,7 +350,7 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn with<D: schema::Singleton, T>(&self, f: impl FnOnce(&D::Value) -> T) -> Option<T> {
         self.guard
-            .get_singleton_value(&D::KEY)
+            .get_singleton_value::<D>()
             .map_singleton_value(|v| f(D::from_value_ref(v)))
     }
 
@@ -353,7 +360,7 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     /// ```rust,ignore
     /// let value = store.table(OWNER).get(key).unwrap();
     /// ```
-    pub fn table<'a, D: schema::TableDesc<TableStorage>>(
+    pub fn table<'a, D: schema::TableDesc<Storage = TableStorage>>(
         &'a self,
     ) -> KvTableRoTransactional<'a, TableStorage, D> {
         KvTableRoTransactional {
@@ -370,13 +377,13 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
 pub struct KvTableRoTransactional<
     'a,
     TableStorage: schema::GeneratedStorage,
-    D: schema::TableDesc<TableStorage>,
+    D: schema::TableDesc<Storage = TableStorage>,
 > {
     txn: &'a RoTransaction<'a, TableStorage>,
     table: PhantomData<D>,
 }
 
-impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStorage>>
+impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = TableStorage>>
     KvTableRoTransactional<'a, TableStorage, D>
 {
     /// Iterate all the key/value pairs in a table.
@@ -394,6 +401,13 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<TableStora
         let storage = &self.txn.guard;
         let table = D::get_table(&storage.tables);
         table.data.len()
+    }
+
+    /// True if the table is empty.
+    pub fn is_empty(&self) -> bool {
+        let storage = &self.txn.guard;
+        let table = D::get_table(&storage.tables);
+        table.data.is_empty()
     }
 
     /// Get a row of the table from the store by cloning the value.

@@ -8,8 +8,6 @@ if we keep typed singletons.
 
 TODO
 
-- check-in on static/dynamic-ness of singleton values
-    - type-driven keys
 - tests
 - refactor
   - use Arc rather than Pin and unsafe for iterator? (only works with Tokio's RwLock)
@@ -18,4 +16,5 @@ TODO
 - transactional API
   - docs
   - check
+- secondary indexes
  

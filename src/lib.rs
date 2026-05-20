@@ -8,7 +8,7 @@
 //! # use ts_kvstore::{Owner, singleton, tables};
 //! # const OWNER: Owner = "owner";
 //!
-//! singleton!(foo("a", &'static str, u64));
+//! singleton!(foo(u64));
 //! tables!(Nodes(u32, String));
 //!
 //! pub fn main() {
@@ -102,7 +102,7 @@ pub use iter::TableIterator;
 #[doc(inline)]
 pub use raw::KvTable;
 #[doc(inline)]
-pub use transactions::{RoTransaction, Transaction};
+pub use transactions::{KvTableRoTransactional, KvTableTransactional, RoTransaction, Transaction};
 
 /// A key-value store. See the crate docs for details. Its schema is described by `TableStorage`.
 pub struct KvStore<TableStorage: schema::GeneratedStorage> {

@@ -4,22 +4,14 @@
 use crate::storage::{SinValue, Table};
 use std::{any::Any, hash::Hash, sync::Arc};
 
-/// Describes the types of a key/value pair or table of pairs in the store.
-///
-/// Prefer to use the macros in this module rather than this trait directly.
-pub trait DataDesc: Sized {
-    /// The type of the key.
-    type Key: Hash + Eq;
-    /// The type of the value.
-    type Value: Any + Send + Sync;
-}
-
+// TODO it would be nice if we could just use the type of the value as the key, but that has
+// problems with the orphan rule.
 /// A singleton key/value.
 ///
 /// Prefer to use the macros in this module rather than this trait directly.
-pub trait Singleton: DataDesc {
-    /// The value of the key.
-    const KEY: Self::Key;
+pub trait Singleton: 'static {
+    /// The type of the value.
+    type Value: Any + Send + Sync;
     /// The type used to initialize and access the value.
     type ArgValue;
 
@@ -53,12 +45,18 @@ pub trait MutSingleton: Singleton {
 /// Describes tabular key/values in the store.
 ///
 /// Prefer to use the macros in this module rather than this trait directly.
-pub trait TableDesc<Storage: GeneratedStorage>: DataDesc {
+pub trait TableDesc: Sized {
+    /// The type of the key.
+    type Key: Hash + Eq;
+    /// The type of the value.
+    type Value: Any + Send + Sync;
     /// The name of the table.
     const NAME: &'static str;
+    /// The storage for the table.
+    type Storage: GeneratedStorage;
 
-    fn get_table(storage: &Storage) -> &Table<Self>;
-    fn get_table_mut(storage: &mut Storage) -> &mut Table<Self>;
+    fn get_table(storage: &Self::Storage) -> &Table<Self>;
+    fn get_table_mut(storage: &mut Self::Storage) -> &mut Table<Self>;
 }
 
 /// Marker trait to indicate a storage implementation.
@@ -76,21 +74,18 @@ pub trait GeneratedStorage: Default {}
 ///
 /// # Syntax:
 ///
-/// - `singleton!(Name(key, KeyType, u64))` to declare a value with type `u64`` and inline storage
-/// - `singleton!(Name(key, KeyType, ValueType, Box))` to declare a value with type `Box<ValueType>`
-/// - `singleton!(Name(key, KeyType, ValueType, Arc))` to declare a value with type `Arc<ValueType>`
-/// - `singleton!(Name(key, KeyType, ValueType, Ref))` to declare a value with type `&'static ValueType`
-///
-/// Where `Name` is the name of the singleton, `key` is the key value, and `KeyType` is the type of
-/// keys.
+/// - `singleton!(u64)` to declare a value with type `u64` and inline storage.
+/// - `singleton!(ValueType, Box)` to declare a value with type `Box<ValueType>`.
+/// - `singleton!(ValueType, Arc)` to declare a value with type `Arc<ValueType>`.
+/// - `singleton!(ValueType, Ref)` to declare a value with type `&'static ValueType`.
 ///
 /// The storage class is separate to the value type since they have different representations in the
 /// store and slightly different APIs (e.g., whether mutable access is supported or access by cloning
 /// or copying a shared reference).
 #[macro_export]
 macro_rules! singleton {
-    ($name: ident ($key: expr, $key_ty: ty, u64)) => {
-        singleton!($name($key, $key_ty, u64, u64, U64));
+    ($name: ident (u64)) => {
+        singleton!($name(u64, u64, U64));
 
         impl $crate::schema::MutSingleton for $name {
             fn from_value_mut(value: &mut $crate::storage::SinValue) -> &mut Self::Value {
@@ -101,8 +96,8 @@ macro_rules! singleton {
             }
         }
     };
-    ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Box)) => {
-        singleton!($name($key, $key_ty, $value_ty, $value_ty, Box));
+    ($name: ident ($value_ty: ty, Box)) => {
+        singleton!($name($value_ty, $value_ty, Box));
 
         impl $crate::schema::MutSingleton for $name {
             fn from_value_mut(value: &mut $crate::storage::SinValue) -> &mut Self::Value {
@@ -113,26 +108,21 @@ macro_rules! singleton {
             }
         }
     };
-    ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Arc)) => {
-        singleton!($name($key, $key_ty, $value_ty, std::sync::Arc<$value_ty>, Arc));
+    ($name: ident ($value_ty: ty, Arc)) => {
+        singleton!($name($value_ty, std::sync::Arc<$value_ty>, Arc));
 
         impl $crate::schema::ArcSingleton for $name {}
     };
-    ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, Ref)) => {
-        singleton!($name($key, $key_ty, $value_ty, &'static $value_ty, Ref))
+    ($name: ident ($value_ty: ty, Ref)) => {
+        singleton!($name($value_ty, &'static $value_ty, Ref))
     };
-    ($name: ident ($key: expr, $key_ty: ty, $value_ty: ty, $arg_value_ty: ty, $variant: ident)) => {
+    ($name: ident ($value_ty: ty, $arg_value_ty: ty, $variant: ident)) => {
         /// Describes a singleton in the KV store.
         #[allow(non_camel_case_types)]
         pub struct $name;
 
-        impl $crate::schema::DataDesc for $name {
-            type Key = $key_ty;
-            type Value = $value_ty;
-        }
-
         impl $crate::schema::Singleton for $name {
-            const KEY: $key_ty = $key;
+            type Value = $value_ty;
             type ArgValue = $arg_value_ty;
 
             fn from_value(value: $crate::storage::SinValue) -> Self::ArgValue {
@@ -253,13 +243,11 @@ macro_rules! tables {
             #[derive(Default)]
             pub struct $name;
 
-            impl $crate::schema::DataDesc for $name {
+            impl $crate::schema::TableDesc for $name {
                 type Key = $key_ty;
                 type Value = $value_ty;
-            }
-
-            impl $crate::schema::TableDesc<TableStorage> for $name {
                 const NAME: &'static str = stringify!($name);
+                type Storage = TableStorage;
 
                 fn get_table(storage: &TableStorage) -> &$crate::storage::Table<Self> {
                     &storage.$name
@@ -307,10 +295,10 @@ mod test {
 
     #[test]
     fn single() {
-        singleton!(Foo("hello", &'static str, u64, Box));
-        singleton!(Bar("hello", &'static str, u64, Arc));
-        singleton!(Baz("hello", &'static str, u64, Ref));
-        singleton!(Qux("hello", &'static str, u64));
+        singleton!(Foo(u64, Box));
+        singleton!(Bar(u64, Arc));
+        singleton!(Baz(u64, Ref));
+        singleton!(Qux(u64));
 
         assert_eq!(&42, Foo::from_value_ref(&Foo::to_value(42)));
         assert_eq!(&42, Bar::from_value_ref(&Bar::to_value(Arc::new(42))));

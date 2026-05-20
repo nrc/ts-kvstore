@@ -1,6 +1,6 @@
 use crate::{Owner, schema};
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     collections::HashMap,
     hash::{BuildHasher, RandomState},
     sync::Arc,
@@ -32,25 +32,19 @@ impl<TableStorage: schema::GeneratedStorage> Storage<TableStorage> {
     }
 
     /// Hash a singleton key.
-    pub(crate) fn hash(&self, thing: impl std::hash::Hash) -> u64 {
-        self.singleton_hash_builder.hash_one(thing)
+    pub(crate) fn hash_for_type<T: Any>(&self) -> u64 {
+        self.singleton_hash_builder.hash_one(TypeId::of::<T>())
     }
 
     /// Retrive a singleton value and its owner from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value(
-        &self,
-        key: impl std::hash::Hash,
-    ) -> Option<&(Owner, SinValue)> {
-        self.singletons.get(&self.hash(key))
+    pub(crate) fn get_singleton_value<T: Any>(&self) -> Option<&(Owner, SinValue)> {
+        self.singletons.get(&self.hash_for_type::<T>())
     }
 
     /// Retrive a singleton value and its owner from the store using the given pre-hashed key.
-    pub(crate) fn get_singleton_value_mut(
-        &mut self,
-        key: impl std::hash::Hash,
-    ) -> Option<(&Owner, &mut SinValue)> {
+    pub(crate) fn get_singleton_value_mut<T: Any>(&mut self) -> Option<(&Owner, &mut SinValue)> {
         self.singletons
-            .get_mut(&self.hash(key))
+            .get_mut(&self.hash_for_type::<T>())
             .map(|&mut (ref o, ref mut v)| (o, v))
     }
 }
@@ -76,14 +70,14 @@ pub enum SinValue {
 /// Tabular data in the KV store, there will be one of these for each logical table in the storage
 /// implementing `TableStorage` in [`Storage`].
 #[doc(hidden)]
-pub struct Table<D: schema::DataDesc> {
+pub struct Table<D: schema::TableDesc> {
     /// Owner of the table.
     pub(crate) owner: Option<Owner>,
     /// KV data.
     pub(crate) data: HashMap<D::Key, D::Value>,
 }
 
-impl<D: schema::DataDesc> Default for Table<D> {
+impl<D: schema::TableDesc> Default for Table<D> {
     fn default() -> Self {
         Self {
             owner: None,

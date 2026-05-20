@@ -20,7 +20,7 @@ pub struct TableIterator<
     'a,
     Guard: Deref<Target = Storage<TableStorage>> + 'a,
     TableStorage: schema::GeneratedStorage + 'static,
-    D: schema::TableDesc<TableStorage> + 'static,
+    D: schema::TableDesc<Storage = TableStorage> + 'static,
 > {
     /// Guard on the KV store's storage (all of it).
     guard: Guard,
@@ -36,12 +36,11 @@ pub struct TableIterator<
     _a: PhantomData<&'a D::Value>,
 }
 
-#[allow(private_bounds)]
 impl<
     'a,
     Guard: Deref<Target = Storage<TableStorage>> + 'a,
     TableStorage: schema::GeneratedStorage + 'static,
-    D: schema::TableDesc<TableStorage> + 'static,
+    D: schema::TableDesc<Storage = TableStorage> + 'static,
 > TableIterator<'a, Guard, TableStorage, D>
 {
     /// Create an iterator over the table described by `D`.
@@ -76,7 +75,7 @@ impl<
     'a,
     Guard: Deref<Target = Storage<TableStorage>> + 'a,
     TableStorage: schema::GeneratedStorage,
-    D: schema::TableDesc<TableStorage>,
+    D: schema::TableDesc<Storage = TableStorage>,
 > Iterator for Pin<Box<TableIterator<'a, Guard, TableStorage, D>>>
 {
     type Item = (&'a D::Key, &'a D::Value);
@@ -91,7 +90,7 @@ impl<
     'a,
     Guard: Deref<Target = Storage<TableStorage>> + 'a,
     TableStorage: schema::GeneratedStorage,
-    D: schema::TableDesc<TableStorage>,
+    D: schema::TableDesc<Storage = TableStorage>,
 > Drop for TableIterator<'a, Guard, TableStorage, D>
 {
     fn drop(&mut self) {

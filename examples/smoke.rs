@@ -2,8 +2,8 @@ use ts_kvstore::{Owner, singleton, tables};
 
 const OWNER: Owner = "owner";
 
-singleton!(foo("a", &'static str, u64));
-singleton!(bar("b", &'static str, u64));
+singleton!(foo(u64));
+singleton!(bar(u64));
 
 tables!(Nodes(u32, String), Edges(String, (u32, u32)));
 

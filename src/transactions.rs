@@ -69,7 +69,14 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     // TODO single-table transactions?
 }
 
-/// TODO docs
+/// A read/write transaction over a [`KvStore`]`.
+///
+/// Create a transaction by calling [`KvStore::begin_transaction`] or [`KvStore::try_begin_transaction`].
+/// A transaction holds a write lock on the whole store while it is active so ensure that code within
+/// a transaction is relatively quick to execute and that you drop transactions as soon as possible
+/// ([`Transaction::commit`] can be used for this).
+///
+/// A transaction must not be kept alive over an `await` point. This can lead to deadlock.
 // TODO do we need to be able to abort a transaction?
 pub struct Transaction<'a, TableStorage: schema::GeneratedStorage> {
     guard: RwLockWriteGuard<'a, Storage<TableStorage>>,
@@ -196,10 +203,7 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     }
 }
 
-/// Abstracts a table of key/values pairs in the store.
-///
-/// `KvTable` has no transactional semantics and only exists as a convenience for accessing
-/// tabular data.
+/// Abstracts a table of key/values pairs in the store accessed as part of a transaction.
 pub struct KvTableTransactional<
     'a,
     't,
@@ -334,6 +338,9 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
     }
 }
 
+/// Helper type for using a reference to a [`RwLockWriteGuard`] as a generic argument to
+/// [`TableIterator`]. Required because checking trait bounds does not take into account
+/// transitivity of `Deref`.
 struct RefWriteGuard<'r, 'a, T>(&'r RwLockWriteGuard<'a, T>);
 
 impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
@@ -344,7 +351,14 @@ impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
     }
 }
 
-/// TODO docs
+/// A read-only transaction over a [`KvStore`]`.
+///
+/// Create a read-only transaction by calling [`KvStore::begin_ro_transaction`] or [`KvStore::try_begin_ro_transaction`].
+/// A read-only transaction holds a read lock on the whole store while it is active so ensure that
+/// code within a transaction is relatively quick to execute and that you drop transactionss as soon
+/// as possible.
+///
+/// A transaction must not be kept alive over an `await` point. This can lead to deadlock.
 pub struct RoTransaction<'a, TableStorage: schema::GeneratedStorage> {
     guard: RwLockReadGuard<'a, Storage<TableStorage>>,
     _owner: Owner,
@@ -403,10 +417,7 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     }
 }
 
-/// Abstracts a table of key/values pairs in the store.
-///
-/// `KvTable` has no transactional semantics and only exists as a convenience for accessing
-/// tabular data.
+/// Abstracts a table of key/values pairs in the store as part of a read-only transaction.
 pub struct KvTableRoTransactional<
     'a,
     TableStorage: schema::GeneratedStorage,
@@ -473,6 +484,9 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     }
 }
 
+/// Helper type for using a reference to a [`RwLockReadGuard`] as a generic argument to
+/// [`TableIterator`]. Required because checking trait bounds does not take into account
+/// transitivity of `Deref`.
 struct RefReadGuard<'a, T>(&'a RwLockReadGuard<'a, T>);
 
 impl<'a, T> Deref for RefReadGuard<'a, T> {

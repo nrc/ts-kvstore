@@ -280,11 +280,11 @@ mod test {
     use std::sync::Arc;
 
     singleton!(Count(u64));
-    singleton!(Name(String, Box));
-    singleton!(Shared(String, Arc));
-    singleton!(Label(u64, Ref));
+    singleton!(Name(String as Box));
+    singleton!(Shared(String as Arc));
+    singleton!(Label(u64 as Ref));
 
-    tables!(Items(&'static str, String), Counters(u32, u64));
+    tables!(Items(&'static str => String), Counters(u32 => u64));
 
     const OWNER: &str = "owner";
     const OTHER: &str = "other";

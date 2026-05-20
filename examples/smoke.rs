@@ -5,7 +5,7 @@ const OWNER: Owner = "owner";
 singleton!(foo(u64));
 singleton!(bar(u64));
 
-tables!(Nodes(u32, String), Edges(String, (u32, u32)));
+tables!(Nodes(u32 => String), Edges(String => (u32, u32)));
 
 pub fn main() {
     let store = KvStore::new();

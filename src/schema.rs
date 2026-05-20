@@ -75,9 +75,9 @@ pub trait GeneratedStorage: Default {}
 /// # Syntax:
 ///
 /// - `singleton!(u64)` to declare a value with type `u64` and inline storage.
-/// - `singleton!(ValueType, Box)` to declare a value with type `Box<ValueType>`.
-/// - `singleton!(ValueType, Arc)` to declare a value with type `Arc<ValueType>`.
-/// - `singleton!(ValueType, Ref)` to declare a value with type `&'static ValueType`.
+/// - `singleton!(ValueType as Box)` to declare a value with type `Box<ValueType>`.
+/// - `singleton!(ValueType as Arc)` to declare a value with type `Arc<ValueType>`.
+/// - `singleton!(ValueType as Ref)` to declare a value with type `&'static ValueType`.
 ///
 /// The storage class is separate to the value type since they have different representations in the
 /// store and slightly different APIs (e.g., whether mutable access is supported or access by cloning
@@ -96,7 +96,7 @@ macro_rules! singleton {
             }
         }
     };
-    ($name: ident ($value_ty: ty, Box)) => {
+    ($name: ident ($value_ty: ty as Box)) => {
         singleton!($name($value_ty, $value_ty, Box));
 
         impl $crate::schema::MutSingleton for $name {
@@ -108,12 +108,12 @@ macro_rules! singleton {
             }
         }
     };
-    ($name: ident ($value_ty: ty, Arc)) => {
+    ($name: ident ($value_ty: ty as Arc)) => {
         singleton!($name($value_ty, std::sync::Arc<$value_ty>, Arc));
 
         impl $crate::schema::ArcSingleton for $name {}
     };
-    ($name: ident ($value_ty: ty, Ref)) => {
+    ($name: ident ($value_ty: ty as Ref)) => {
         singleton!($name($value_ty, &'static $value_ty, Ref));
     };
     ($name: ident ($value_ty: ty, $arg_value_ty: ty, $variant: ident)) => {
@@ -231,13 +231,13 @@ macro_rules! match_helper_rhs_mut {
 /// # pub struct Node;
 /// # pub trait Edge {}
 /// tables!(
-///   Nodes(&'static str, Node),
-///   Edges(u32, Box<dyn Edge + Send + Sync>)
+///   Nodes(&'static str => Node),
+///   Edges(u32 => Box<dyn Edge + Send + Sync>)
 /// );
 /// ```
 #[macro_export]
 macro_rules! tables {
-    ($($name: ident ($key_ty: ty, $value_ty: ty)),*) => {
+    ($($name: ident ($key_ty: ty => $value_ty: ty)),*) => {
         $(
             /// Describes a table in the KV store.
             #[derive(Default)]
@@ -295,9 +295,9 @@ mod test {
 
     #[test]
     fn single() {
-        singleton!(Foo(u64, Box));
-        singleton!(Bar(u64, Arc));
-        singleton!(Baz(u64, Ref));
+        singleton!(Foo(u64 as Box));
+        singleton!(Bar(u64 as Arc));
+        singleton!(Baz(u64 as Ref));
         singleton!(Qux(u64));
 
         assert_eq!(&42, Foo::from_value_ref(&Foo::to_value(42)));
@@ -314,7 +314,7 @@ mod test {
 
     #[test]
     fn table() {
-        tables!(Foo(&'static str, String), Bar(u32, Vec<String>));
+        tables!(Foo(&'static str => String), Bar(u32 => Vec<String>));
 
         let store = KvStore::new();
 

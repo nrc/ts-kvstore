@@ -12,7 +12,6 @@ TODO
   - use Arc rather than Pin and unsafe for iterator? (only works with Tokio's RwLock)
   - general re-org stuff
 - transactional API
-  - docs
   - check
 - secondary indexes
  

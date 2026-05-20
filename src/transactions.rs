@@ -504,9 +504,9 @@ mod test {
     use std::sync::Arc;
 
     singleton!(Count(u64));
-    singleton!(Shared(String, Arc));
+    singleton!(Shared(String as Arc));
 
-    tables!(Items(&'static str, String), Counters(u32, u64));
+    tables!(Items(&'static str => String), Counters(u32 => u64));
 
     const OWNER: &str = "owner";
     #[cfg(debug_assertions)]

@@ -9,7 +9,7 @@
 //! # const OWNER: Owner = "owner";
 //!
 //! singleton!(foo(u64));
-//! tables!(Nodes(u32, String));
+//! tables!(Nodes(u32 => String));
 //!
 //! pub fn main() {
 //!     let store = KvStore::new();

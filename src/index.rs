@@ -5,30 +5,6 @@ use crate::{
 };
 use std::{borrow::Borrow, hash::Hash, marker::PhantomData, sync::RwLockReadGuard};
 
-impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
-    /// Access a table via an index.
-    ///
-    /// # Example:
-    ///
-    /// ```rust,ignore
-    /// let value = store.table_by::<index::Foo::bar>(OWNER).get(key).unwrap();
-    /// ```
-    ///
-    /// Here `Foo` describes a tables and `bar` describes an index over `Foo` using the `bar` field
-    /// as foreign key.
-    pub fn table_by<'a, D: schema::IndexDesc<Storage = TableStorage>>(
-        &'a self,
-        owner: Owner,
-    ) -> KvTableIndex<'a, TableStorage, D, D::BaseTable> {
-        KvTableIndex {
-            store: self,
-            owner,
-            index: PhantomData,
-            base: PhantomData,
-        }
-    }
-}
-
 /// An abstraction for operating on a table of key/values pairs via an index .
 ///
 /// `KvTableIndex` has no transactional semantics and only exists as a convenience for accessing
@@ -45,10 +21,10 @@ pub struct KvTableIndex<
     D: IndexDesc<Storage = TableStorage, BaseTable = B>,
     B: TableDesc<Storage = TableStorage>,
 > {
-    store: &'a KvStore<TableStorage>,
-    owner: Owner,
-    index: PhantomData<D>,
-    base: PhantomData<B>,
+    pub(crate) store: &'a KvStore<TableStorage>,
+    pub(crate) owner: Owner,
+    pub(crate) index: PhantomData<D>,
+    pub(crate) base: PhantomData<B>,
 }
 
 impl<
@@ -71,64 +47,6 @@ impl<
         base.try_set_owner(self.owner)
     }
 
-    /// Iterate all the keys in the index and value in the base table.
-    ///
-    /// Clones both keys and values (but not the intermediate keys) and provides them by-value. To
-    /// iterate without cloning, see [`Self::for_each`].
-    pub fn iter_cloned(&'a self) -> impl Iterator<Item = (D::Key, B::Value)>
-    where
-        D::Key: Clone,
-        B::Value: Clone,
-    {
-        let guard = self.store.storage.read().unwrap();
-        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B>::new(guard)
-    }
-
-    /// Iterate all the keys in the index and value in the base table.
-    ///
-    /// We're not able to make this an iterator because we have to ensure that the references do
-    /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
-    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &B::Value)) {
-        let storage = self.store.storage.read().unwrap();
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        for (k, base_key) in &index.data {
-            let Some(v) = base.data.get(base_key) else {
-                continue;
-            };
-            f(k, v);
-        }
-    }
-
-    /// Iterate all the key/value pairs in a table. Values are mutable.
-    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut B::Value)) {
-        let mut storage = self.store.storage.write().unwrap();
-        let tables: *mut _ = &mut storage.tables;
-        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
-        // different `Table` objects. Although the compiler treats `base` and `index` as having
-        // a reference to `storage.tables`, they do not, so the references here are transient and
-        // all mutable references are unique.
-        let base = B::get_table_mut(unsafe { tables.as_mut_unchecked() });
-        let index = D::get_table(&storage.tables);
-
-        for (k, base_key) in &index.data {
-            let Some(v) = base.data.get_mut(base_key) else {
-                continue;
-            };
-            f(k, v);
-        }
-    }
-
-    /// Clear the base table by removing all its KVs, but preserving ownership.
-    pub fn clear(&self) {
-        let mut storage = self.store.storage.write().unwrap();
-        let base: &mut crate::storage::Table<B, <B as TableDesc>::Indexes> =
-            B::get_table_mut(&mut storage.tables);
-        base.assert_or_set_owner(self.owner);
-        base.indexes.clear();
-        base.data.clear();
-    }
-
     /// The number of key/value pairs in the base table.
     pub fn len(&self) -> usize {
         let storage = self.store.storage.read().unwrap();
@@ -141,6 +59,16 @@ impl<
         let storage = self.store.storage.read().unwrap();
         let base = B::get_table(&storage.tables);
         base.data.is_empty()
+    }
+
+    /// Clear the base table by removing all its KVs, but preserving ownership.
+    pub fn clear(&self) {
+        let mut storage = self.store.storage.write().unwrap();
+        let base: &mut crate::storage::Table<B, <B as TableDesc>::Indexes> =
+            B::get_table_mut(&mut storage.tables);
+        base.assert_or_set_owner(self.owner);
+        base.indexes.clear();
+        base.data.clear();
     }
 
     /// Get a row of the table from the store by cloning the value.
@@ -176,7 +104,7 @@ impl<
         Some(f(value))
     }
 
-    /// Insert a value into the table.
+    /// Insert a value into the table using the base table's key.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn insert(&self, key: B::Key, value: B::Value) -> Option<B::Value>
@@ -231,6 +159,54 @@ impl<
         let value = base.data.remove(base_key.borrow())?;
         base.indexes.on_remove(&value);
         Some(value)
+    }
+
+    /// Iterate all the keys in the index and value in the base table.
+    ///
+    /// Clones both keys and values (but not the intermediate keys) and provides them by-value. To
+    /// iterate without cloning, see [`Self::for_each`].
+    pub fn iter_cloned(&'a self) -> impl Iterator<Item = (D::Key, B::Value)>
+    where
+        D::Key: Clone,
+        B::Value: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B>::new(guard)
+    }
+
+    /// Iterate all the keys in the index and value in the base table.
+    ///
+    /// We're not able to make this an iterator because we have to ensure that the references do
+    /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
+    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &B::Value)) {
+        let storage = self.store.storage.read().unwrap();
+        let base = B::get_table(&storage.tables);
+        let index = D::get_table(&storage.tables);
+        for (k, base_key) in &index.data {
+            let Some(v) = base.data.get(base_key) else {
+                continue;
+            };
+            f(k, v);
+        }
+    }
+
+    /// Iterate all the key/value pairs in a table. Values are mutable.
+    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut B::Value)) {
+        let mut storage = self.store.storage.write().unwrap();
+        let tables: *mut _ = &mut storage.tables;
+        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
+        // different `Table` objects. Although the compiler treats `base` and `index` as having
+        // a reference to `storage.tables`, they do not, so the references here are transient and
+        // all mutable references are unique.
+        let base = B::get_table_mut(unsafe { tables.as_mut_unchecked() });
+        let index = D::get_table(&storage.tables);
+
+        for (k, base_key) in &index.data {
+            let Some(v) = base.data.get_mut(base_key) else {
+                continue;
+            };
+            f(k, v);
+        }
     }
 }
 

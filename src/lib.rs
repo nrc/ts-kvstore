@@ -7,7 +7,6 @@
 //! ```rust
 //! # use ts_kvstore::{Owner, singleton, tables};
 //! # const OWNER: Owner = "owner";
-//!
 //! singleton!(foo(u64));
 //! tables!(Nodes(u32 => String));
 //!
@@ -24,7 +23,11 @@
 //!
 //!     assert_eq!(nodes.len(), 4);
 //!
-//!     println!("singleton: {}, row 4: {}", store.get::<foo>(OWNER).unwrap(), nodes.get(&4).unwrap());
+//!     println!(
+//!         "singleton: {}, row 4: {}",
+//!         store.get::<foo>(OWNER).unwrap(),
+//!         nodes.get(&4).unwrap(),
+//!     );
 //! }
 //! ```
 //!
@@ -55,7 +58,22 @@
 //! mutated by that owner. Reading data is not protected by ownership. A table has a single owner for
 //! all rows.
 //!
-//! TODO indexes
+//! An index is a table in the store that is derived from its base table and provides direct access
+//! to elements in the base table. Indexes are maintained by the store and are atomically updated
+//! when the base table is modified.
+//!
+//! For example, consider a table `Base` which maps `u64` keys to `Foo` values where `Foo` has a
+//! field `bar: Url` (and `bar` is a unique identifier for a `Foo` in `Base`). The schema would look
+//! like `tables!(Base(Base => Foo; index(bar: Url)));` which will create a `Base` table and an
+//! `index::Base::bar` table. The index table can be accessed directly like a normal table, but I
+//! don't recommend it. The key type is `Url` and the value type is `u64`. By using
+//! `store.table_by::<index::Base::bar>(...)` the `Base` table can be accessed as if it were a table
+//! mapping `Url`s to `Foo`s. The index is maintained whenever `Base` is modified (directly or via
+//! any index) by using the `bar` field of the values in `Base`.
+//!
+//! Index fields must uniquely identify a row in the base table. If multiple rows in the base table
+//! have the same key in the index, then behavior is unspecified (might give partial or incorrect
+//! result, might panic, etc.).
 //!
 //! # Async access
 //!
@@ -91,7 +109,6 @@ use std::sync::RwLock;
 mod index;
 mod iter;
 mod raw;
-#[doc(hidden)]
 pub mod schema;
 mod singleton;
 #[doc(hidden)]
@@ -99,7 +116,9 @@ pub mod storage;
 mod transactions;
 
 #[doc(inline)]
-pub use iter::TableIterator;
+pub use index::KvTableIndex;
+#[doc(inline)]
+pub use iter::{IndexIterator, TableIterator};
 #[doc(inline)]
 pub use raw::KvTable;
 #[doc(inline)]

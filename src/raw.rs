@@ -2,6 +2,7 @@
 
 use crate::{
     KvStore, Owner, Result,
+    index::KvTableIndex,
     iter::{self, TableIterator},
     schema::{self, IndexStorage},
     singleton::{OptSingletonValue, assert_owner},
@@ -16,6 +17,46 @@ use std::{
 };
 
 impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
+    /// Operate on tables of key/values in the store.
+    ///
+    /// # Example:
+    ///
+    /// ```rust,ignore
+    /// let value = store.table::<Foo>(OWNER).get(key).unwrap();
+    /// ```
+    pub fn table<'a, D: schema::TableDesc<Storage = TableStorage>>(
+        &'a self,
+        owner: Owner,
+    ) -> KvTable<'a, TableStorage, D> {
+        KvTable {
+            store: self,
+            owner,
+            table: PhantomData,
+        }
+    }
+
+    /// Access a table via an index.
+    ///
+    /// # Example:
+    ///
+    /// ```rust,ignore
+    /// let value = store.table_by::<index::Foo::bar>(OWNER).get(key).unwrap();
+    /// ```
+    ///
+    /// Here `Foo` describes a tables and `bar` describes an index over `Foo` using the `bar` field
+    /// as foreign key.
+    pub fn table_by<'a, D: schema::IndexDesc<Storage = TableStorage>>(
+        &'a self,
+        owner: Owner,
+    ) -> KvTableIndex<'a, TableStorage, D, D::BaseTable> {
+        KvTableIndex {
+            store: self,
+            owner,
+            index: PhantomData,
+            base: PhantomData,
+        }
+    }
+
     /// Get a single value from the store by cloning the value.
     ///
     /// Returns `None` if there is no value for the specified key.
@@ -117,24 +158,6 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
             .insert(key, (owner, SinValue::None))
             .map_singleton_value(|v| D::from_value(v))
     }
-
-    /// Operate on tables of key/values in the store.
-    ///
-    /// # Example:
-    ///
-    /// ```rust,ignore
-    /// let value = store.table::<Foo>(OWNER).get(key).unwrap();
-    /// ```
-    pub fn table<'a, D: schema::TableDesc<Storage = TableStorage>>(
-        &'a self,
-        owner: Owner,
-    ) -> KvTable<'a, TableStorage, D> {
-        KvTable {
-            store: self,
-            owner,
-            table: PhantomData,
-        }
-    }
 }
 
 /// Abstracts a table of key/values pairs in the store.
@@ -167,74 +190,6 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         table.try_set_owner(self.owner)
     }
 
-    /// Iterate all the key/value pairs in a table.
-    ///
-    /// Clones both keys and values and provides them by-value. To iterate without cloning, see
-    /// [`Self::for_each`].
-    pub fn iter_cloned(&'a self) -> impl Iterator<Item = (D::Key, D::Value)>
-    where
-        D::Key: Clone,
-        D::Value: Clone,
-    {
-        let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::KeysAndValues>::new(
-            guard,
-        )
-    }
-
-    /// Iterate all the keys in a table.
-    ///
-    /// Clones the keys and provides them by-value. To iterate without cloning, see
-    /// [`Self::for_each`].
-    pub fn iter_keys_cloned(&'a self) -> impl Iterator<Item = D::Key>
-    where
-        D::Key: Clone,
-    {
-        let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Keys>::new(guard)
-    }
-
-    /// Iterate all the values in a table.
-    ///
-    /// Clones values and provides them by-value. To iterate without cloning, see
-    /// [`Self::for_each`].
-    pub fn iter_values_cloned(&'a self) -> impl Iterator<Item = D::Value>
-    where
-        D::Value: Clone,
-    {
-        let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Values>::new(guard)
-    }
-
-    /// Iterate all the key/value pairs in a table.
-    ///
-    /// We're not able to make this an iterator because we have to ensure that the references do
-    /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
-    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &D::Value)) {
-        let storage = self.store.storage.read().unwrap();
-        let table = D::get_table(&storage.tables);
-        for (k, v) in &table.data {
-            f(k, v);
-        }
-    }
-
-    /// Iterate all the key/value pairs in a table. Values are mutable.
-    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut D::Value)) {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        for (k, v) in &mut table.data {
-            f(k, v);
-        }
-    }
-
-    /// Clear a table by removing all its KVs, but preserve ownership.
-    pub fn clear(&self) {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.assert_or_set_owner(self.owner);
-        table.data.clear();
-    }
-
     /// The number of key/value pairs in the table.
     pub fn len(&self) -> usize {
         let storage = self.store.storage.read().unwrap();
@@ -247,6 +202,14 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         let storage = self.store.storage.read().unwrap();
         let table = D::get_table(&storage.tables);
         table.data.is_empty()
+    }
+
+    /// Clear a table by removing all its KVs, but preserve ownership.
+    pub fn clear(&self) {
+        let mut storage = self.store.storage.write().unwrap();
+        let table = D::get_table_mut(&mut storage.tables);
+        table.assert_or_set_owner(self.owner);
+        table.data.clear();
     }
 
     /// Get a row of the table from the store by cloning the value.
@@ -326,6 +289,66 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         let value = table.data.remove(key.borrow())?;
         table.indexes.on_remove(&value);
         Some(value)
+    }
+
+    /// Iterate all the key/value pairs in a table.
+    ///
+    /// Clones both keys and values and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_cloned(&'a self) -> impl Iterator<Item = (D::Key, D::Value)>
+    where
+        D::Key: Clone,
+        D::Value: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::KeysAndValues>::new(
+            guard,
+        )
+    }
+
+    /// Iterate all the keys in a table.
+    ///
+    /// Clones the keys and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_keys_cloned(&'a self) -> impl Iterator<Item = D::Key>
+    where
+        D::Key: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Keys>::new(guard)
+    }
+
+    /// Iterate all the values in a table.
+    ///
+    /// Clones values and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_values_cloned(&'a self) -> impl Iterator<Item = D::Value>
+    where
+        D::Value: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Values>::new(guard)
+    }
+
+    /// Iterate all the key/value pairs in a table.
+    ///
+    /// We're not able to make this an iterator because we have to ensure that the references do
+    /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
+    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &D::Value)) {
+        let storage = self.store.storage.read().unwrap();
+        let table = D::get_table(&storage.tables);
+        for (k, v) in &table.data {
+            f(k, v);
+        }
+    }
+
+    /// Iterate all the key/value pairs in a table. Values are mutable.
+    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut D::Value)) {
+        let mut storage = self.store.storage.write().unwrap();
+        let table = D::get_table_mut(&mut storage.tables);
+        for (k, v) in &mut table.data {
+            f(k, v);
+        }
     }
 }
 

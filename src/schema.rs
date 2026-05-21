@@ -242,7 +242,7 @@ macro_rules! match_helper_rhs_mut {
 
 /// Declare the tables in a key/value store. Generates the store itself with the specified tables.
 ///
-/// The syntax is `tables!(Name(KeyType, ValueType),*)`, where `Name` is an identifier to name
+/// The syntax is `tables!(Name(KeyType, ValueType indexes?),*)`, where `Name` is an identifier to name
 /// the table, and `KeyType` and `ValueType` are types. `Name` is used as a type argument to
 /// KvStore methods to identify the table. Use with an empty list of tables to generate a store
 /// for use only with singleton key/value pairs.
@@ -258,6 +258,25 @@ macro_rules! match_helper_rhs_mut {
 ///   Edges(u32 => Box<dyn Edge + Send + Sync>)
 /// );
 /// ```
+/// # Indexes
+///
+/// The syntax of an indexes is `index(field: Type)` where `field` is the name of a field in the value
+/// type of the base table and `Type` is the type of that field. You can specify multiple indexes
+/// for each table, separated with a semicolon. E.g.,
+///
+/// ```rust
+/// # use ts_kvstore::tables;
+/// # pub struct Node { a: u32, b: String};
+/// tables!(
+///   Nodes(&'static str => Node; index(a: u32); index(b: String))
+/// );
+/// ```
+///
+/// This will create two indexes on nodes for fields `a` and `b`.
+///
+/// Index fields must uniquely identify a row in the base table. If multiple rows in the base table
+/// have the same key in the index, then behavior is unspecified (might give partial or incorrect
+/// result, might panic, etc.).
 #[macro_export]
 macro_rules! tables {
     ($($name: ident ($key_ty: ty => $value_ty: ty $(; index($field: ident: $field_ty: ty))*)),*) => {

@@ -68,8 +68,9 @@ pub struct Table<D: schema::TableDesc, I: Default> {
     /// Owner of the table.
     pub(crate) owner: Option<Owner>,
     /// KV data.
-    pub(crate) data: HashMap<D::Key, D::Value>,
-    pub(crate) indexes: I,
+    pub data: HashMap<D::Key, D::Value>,
+    /// All indexes of this table (empty if there are no indexes or this table itself is an index).
+    pub indexes: I,
 }
 
 impl<D: schema::TableDesc, I: Default> Default for Table<D, I> {

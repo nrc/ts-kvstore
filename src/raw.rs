@@ -2,7 +2,6 @@
 
 use crate::{
     Error, KvStore, Owner, Result,
-    index::KvTableIndex,
     iter::{self, TableIterator},
     schema::{self, IndexStorage},
     singleton::{OptSingletonValue, assert_owner},
@@ -121,9 +120,10 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
 
     /// Operate on tables of key/values in the store.
     ///
-    /// Example:
+    /// # Example:
+    ///
     /// ```rust,ignore
-    /// let value = store.table(OWNER).get(key).unwrap();
+    /// let value = store.table::<Foo>(OWNER).get(key).unwrap();
     /// ```
     pub fn table<'a, D: schema::TableDesc<Storage = TableStorage>>(
         &'a self,
@@ -133,18 +133,6 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
             store: self,
             owner,
             table: PhantomData,
-        }
-    }
-
-    pub fn table_by<'a, D: schema::IndexDesc<Storage = TableStorage>>(
-        &'a self,
-        owner: Owner,
-    ) -> KvTableIndex<'a, TableStorage, D, D::BaseTable> {
-        KvTableIndex {
-            store: self,
-            owner,
-            index: PhantomData,
-            base: PhantomData,
         }
     }
 }

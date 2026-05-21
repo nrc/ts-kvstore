@@ -55,6 +55,8 @@
 //! mutated by that owner. Reading data is not protected by ownership. A table has a single owner for
 //! all rows.
 //!
+//! TODO indexes
+//!
 //! # Async access
 //!
 //! ts-kvstore has a synchronous API and no async functions. It is safe to use it in an async, as

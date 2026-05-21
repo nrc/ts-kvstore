@@ -6,7 +6,7 @@ TODO
   - general re-org stuff
   - iterators de-dup
 - secondary indexes
-  - docs
+  - docs in lib.rs
   - transactions
   - values and keys iterators
 - pub/sub

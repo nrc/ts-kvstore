@@ -270,7 +270,7 @@ macro_rules! tables {
                 type Key = $key_ty;
                 type Value = $value_ty;
                 type Storage = TableStorage;
-                type Indexes = indexes::$name::Indexes;
+                type Indexes = index::$name::Indexes;
 
                 fn get_table(storage: &TableStorage) -> &$crate::storage::Table<Self, Self::Indexes> {
                     &storage.$name
@@ -281,7 +281,7 @@ macro_rules! tables {
             }
 
             $(
-                impl $crate::schema::TableDesc for indexes::$name::$field {
+                impl $crate::schema::TableDesc for index::$name::$field {
                     type Key = $field_ty;
                     type Value = $key_ty;
                     type Storage = TableStorage;
@@ -295,7 +295,7 @@ macro_rules! tables {
                     }
                 }
 
-                impl $crate::schema::IndexDesc for indexes::$name::$field {
+                impl $crate::schema::IndexDesc for index::$name::$field {
                     type BaseTable = $name;
                 }
             )*
@@ -305,11 +305,11 @@ macro_rules! tables {
         #[derive(Default)]
         #[allow(non_snake_case)]
         pub struct TableStorage {
-            $($name: $crate::storage::Table<$name, indexes::$name::Indexes>),*
+            $($name: $crate::storage::Table<$name, index::$name::Indexes>),*
         }
         impl $crate::schema::GeneratedStorage for TableStorage {}
 
-        pub mod indexes {
+        pub mod index {
             $(
                 #[allow(non_snake_case)]
                 pub mod $name {
@@ -329,7 +329,7 @@ macro_rules! tables {
         }
 
         $(
-            impl $crate::schema::IndexStorage<$key_ty, $value_ty> for indexes::$name::Indexes {
+            impl $crate::schema::IndexStorage<$key_ty, $value_ty> for index::$name::Indexes {
                 fn clear(&mut self) {
                     $(
                         self.$field.data.clear();
@@ -433,7 +433,7 @@ mod test {
             },
         );
         let value = store
-            .table_by::<indexes::Bar::a>("owner")
+            .table_by::<index::Bar::a>("owner")
             .get("hello")
             .unwrap();
         assert_eq!(value.a, "hello")

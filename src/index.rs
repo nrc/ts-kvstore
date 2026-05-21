@@ -5,6 +5,37 @@ use crate::{
 };
 use std::{borrow::Borrow, hash::Hash, marker::PhantomData, sync::RwLockReadGuard};
 
+impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
+    /// Access a table via an index.
+    ///
+    /// # Example:
+    ///
+    /// ```rust,ignore
+    /// let value = store.table_by::<index::Foo::bar>(OWNER).get(key).unwrap();
+    /// ```
+    /// 
+    /// Here `Foo` describes a tables and `bar` describes an index over `Foo` using the `bar` field
+    /// as foreign key.
+    pub fn table_by<'a, D: schema::IndexDesc<Storage = TableStorage>>(
+        &'a self,
+        owner: Owner,
+    ) -> KvTableIndex<'a, TableStorage, D, D::BaseTable> {
+        KvTableIndex {
+            store: self,
+            owner,
+            index: PhantomData,
+            base: PhantomData,
+        }
+    }
+}
+
+/// An abstraction for operating on a table of key/values pairs via an index .
+///
+/// `KvTableIndex` has no transactional semantics and only exists as a convenience for accessing
+/// tabular data.
+///
+/// `D` describes the index table.
+/// `B` describes the base table.
 pub struct KvTableIndex<
     'a,
     TableStorage: schema::GeneratedStorage,
@@ -224,18 +255,15 @@ mod test {
     #[test]
     fn index_init_succeeds_on_fresh_table() {
         let store = KvStore::new();
-        assert!(store.table_by::<indexes::Users::name>(OWNER).init().is_ok());
+        assert!(store.table_by::<index::Users::name>(OWNER).init().is_ok());
     }
 
     #[test]
     fn index_init_second_call_returns_err() {
         let store = KvStore::new();
-        store
-            .table_by::<indexes::Users::name>(OWNER)
-            .init()
-            .unwrap();
+        store.table_by::<index::Users::name>(OWNER).init().unwrap();
         let err = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .init()
             .unwrap_err();
         assert!(matches!(err, Error::AlreadyInit(o) if o == OWNER));
@@ -244,12 +272,9 @@ mod test {
     #[test]
     fn index_init_with_different_owner_returns_err() {
         let store = KvStore::new();
-        store
-            .table_by::<indexes::Users::name>(OWNER)
-            .init()
-            .unwrap();
+        store.table_by::<index::Users::name>(OWNER).init().unwrap();
         let err = store
-            .table_by::<indexes::Users::name>(OTHER)
+            .table_by::<index::Users::name>(OTHER)
             .init()
             .unwrap_err();
         assert!(matches!(err, Error::AlreadyInit(o) if o == OWNER));
@@ -258,10 +283,7 @@ mod test {
     #[test]
     fn index_init_and_base_init_share_owner() {
         let store = KvStore::new();
-        store
-            .table_by::<indexes::Users::name>(OWNER)
-            .init()
-            .unwrap();
+        store.table_by::<index::Users::name>(OWNER).init().unwrap();
         let err = store.table::<Users>(OWNER).init().unwrap_err();
         assert!(matches!(err, Error::AlreadyInit(o) if o == OWNER));
     }
@@ -269,19 +291,19 @@ mod test {
     #[test]
     fn index_len_is_zero_on_fresh_store() {
         let store = KvStore::new();
-        assert_eq!(store.table_by::<indexes::Users::name>(OWNER).len(), 0);
+        assert_eq!(store.table_by::<index::Users::name>(OWNER).len(), 0);
     }
 
     #[test]
     fn index_is_empty_on_fresh_store() {
         let store = KvStore::new();
-        assert!(store.table_by::<indexes::Users::name>(OWNER).is_empty());
+        assert!(store.table_by::<index::Users::name>(OWNER).is_empty());
     }
 
     #[test]
     fn index_len_increases_with_inserts() {
         let store = KvStore::new();
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         index.insert(1, row("Alice"));
         index.insert(2, row("Bob"));
         assert_eq!(index.len(), 2);
@@ -291,9 +313,9 @@ mod test {
     fn index_is_empty_false_after_insert() {
         let store = KvStore::new();
         store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .insert(1, row("Alice"));
-        assert!(!store.table_by::<indexes::Users::name>(OWNER).is_empty());
+        assert!(!store.table_by::<index::Users::name>(OWNER).is_empty());
     }
 
     #[test]
@@ -301,7 +323,7 @@ mod test {
         let store = KvStore::new();
         assert!(
             store
-                .table_by::<indexes::Users::name>(OWNER)
+                .table_by::<index::Users::name>(OWNER)
                 .get("Alice")
                 .is_none()
         );
@@ -312,7 +334,7 @@ mod test {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         let value = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .get("Alice")
             .unwrap();
         assert_eq!(value, row("Alice"));
@@ -322,10 +344,10 @@ mod test {
     fn index_get_returns_value_after_index_insert() {
         let store = KvStore::new();
         store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .insert(1, row("Alice"));
         let value = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .get("Alice")
             .unwrap();
         assert_eq!(value, row("Alice"));
@@ -336,7 +358,7 @@ mod test {
         let store = KvStore::new();
         let mut called = false;
         let result = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .with("Alice", |_| {
                 called = true;
             });
@@ -349,7 +371,7 @@ mod test {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         let len = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .with("Alice", |v| v.name.len());
         assert_eq!(len, Some(5));
     }
@@ -359,7 +381,7 @@ mod test {
         let store = KvStore::new();
         assert!(
             store
-                .table_by::<indexes::Users::name>(OWNER)
+                .table_by::<index::Users::name>(OWNER)
                 .insert(1, row("Alice"))
                 .is_none()
         );
@@ -369,10 +391,10 @@ mod test {
     fn index_insert_returns_previous_value_when_overwriting_base_key() {
         let store = KvStore::new();
         store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .insert(1, row("Alice"));
         let old = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .insert(1, row("Alice"));
         assert_eq!(old, Some(row("Alice")));
     }
@@ -381,7 +403,7 @@ mod test {
     fn index_insert_is_visible_via_base_table() {
         let store = KvStore::new();
         store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .insert(1, row("Alice"));
         let value = store.table::<Users>(OWNER).get(&1).unwrap();
         assert_eq!(value, row("Alice"));
@@ -393,7 +415,7 @@ mod test {
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         assert!(
             store
-                .table_by::<indexes::Users::name>(OWNER)
+                .table_by::<index::Users::name>(OWNER)
                 .get("Alice")
                 .is_some()
         );
@@ -404,7 +426,7 @@ mod test {
         let store = KvStore::new();
         assert!(
             store
-                .table_by::<indexes::Users::name>(OWNER)
+                .table_by::<index::Users::name>(OWNER)
                 .remove("Alice")
                 .is_none()
         );
@@ -414,9 +436,7 @@ mod test {
     fn index_remove_returns_value() {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
-        let value = store
-            .table_by::<indexes::Users::name>(OWNER)
-            .remove("Alice");
+        let value = store.table_by::<index::Users::name>(OWNER).remove("Alice");
         assert_eq!(value, Some(row("Alice")));
     }
 
@@ -424,9 +444,7 @@ mod test {
     fn index_remove_makes_base_absent() {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
-        store
-            .table_by::<indexes::Users::name>(OWNER)
-            .remove("Alice");
+        store.table_by::<index::Users::name>(OWNER).remove("Alice");
         assert!(store.table::<Users>(OWNER).get(&1).is_none());
     }
 
@@ -434,12 +452,10 @@ mod test {
     fn index_remove_makes_index_absent() {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
-        store
-            .table_by::<indexes::Users::name>(OWNER)
-            .remove("Alice");
+        store.table_by::<index::Users::name>(OWNER).remove("Alice");
         assert!(
             store
-                .table_by::<indexes::Users::name>(OWNER)
+                .table_by::<index::Users::name>(OWNER)
                 .get("Alice")
                 .is_none()
         );
@@ -452,7 +468,7 @@ mod test {
         store.table::<Users>(OWNER).remove(&1);
         assert!(
             store
-                .table_by::<indexes::Users::name>(OWNER)
+                .table_by::<index::Users::name>(OWNER)
                 .get("Alice")
                 .is_none()
         );
@@ -462,7 +478,7 @@ mod test {
     fn index_mutate_returns_none_when_absent() {
         let store = KvStore::new();
         let result = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .mutate("Alice", |v| v.name.len());
         assert!(result.is_none());
     }
@@ -472,7 +488,7 @@ mod test {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .mutate("Alice", |v| v.name.push_str(" Smith"));
         let value = store.table::<Users>(OWNER).get(&1).unwrap();
         assert_eq!(value.name, "Alice Smith");
@@ -483,18 +499,18 @@ mod test {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .mutate("Alice", |v| {
                 v.name = "Charlie".to_owned();
             });
         assert!(
             store
-                .table_by::<indexes::Users::name>(OWNER)
+                .table_by::<index::Users::name>(OWNER)
                 .get("Alice")
                 .is_none()
         );
         let value = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .get("Charlie")
             .unwrap();
         assert_eq!(value.name, "Charlie");
@@ -503,7 +519,7 @@ mod test {
     #[test]
     fn index_clear_removes_all_rows() {
         let store = KvStore::new();
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         index.insert(1, row("Alice"));
         index.insert(2, row("Bob"));
         index.clear();
@@ -513,7 +529,7 @@ mod test {
     #[test]
     fn index_clear_removes_index_entries() {
         let store = KvStore::new();
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         index.insert(1, row("Alice"));
         index.clear();
         assert!(index.get("Alice").is_none());
@@ -522,7 +538,7 @@ mod test {
     #[test]
     fn index_iter_empty_on_fresh_store() {
         let store = KvStore::new();
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         let items: Vec<_> = index.iter_cloned().collect();
         assert!(items.is_empty());
     }
@@ -532,7 +548,7 @@ mod test {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         let items: Vec<_> = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .iter_cloned()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -545,7 +561,7 @@ mod test {
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         store.table::<Users>(OWNER).insert(2, row("Bob"));
         let mut items: Vec<_> = store
-            .table_by::<indexes::Users::name>(OWNER)
+            .table_by::<index::Users::name>(OWNER)
             .iter_cloned()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
@@ -562,7 +578,7 @@ mod test {
     #[test]
     fn index_for_each_empty_calls_closure_zero_times() {
         let store = KvStore::new();
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         let mut count = 0;
         index.for_each(|_, _| count += 1);
         assert_eq!(count, 0);
@@ -572,7 +588,7 @@ mod test {
     fn index_for_each_yields_index_key_and_base_value() {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         let mut items: Vec<_> = Vec::new();
         index.for_each(|k, v| items.push((k.clone(), v.clone())));
         assert_eq!(items, vec![("Alice".to_owned(), row("Alice"))]);
@@ -583,7 +599,7 @@ mod test {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         store.table::<Users>(OWNER).insert(2, row("Bob"));
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         let mut items: Vec<_> = Vec::new();
         index.for_each(|k, v| items.push((k.clone(), v.clone())));
         items.sort_by_key(|(k, _)| k.clone());
@@ -599,7 +615,7 @@ mod test {
     #[test]
     fn index_for_each_mut_empty_calls_closure_zero_times() {
         let store = KvStore::new();
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         let mut count = 0;
         index.for_each_mut(|_, _| count += 1);
         assert_eq!(count, 0);
@@ -609,7 +625,7 @@ mod test {
     fn index_for_each_mut_modifies_base_values() {
         let store = KvStore::new();
         store.table::<Users>(OWNER).insert(1, row("Alice"));
-        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let index = store.table_by::<index::Users::name>(OWNER);
         index.for_each_mut(|_, v| v.name.push('!'));
         assert_eq!(store.table::<Users>(OWNER).get(&1), Some(row("Alice!")));
     }
@@ -619,12 +635,9 @@ mod test {
     #[should_panic(expected = "Ownership violation")]
     fn index_insert_wrong_owner_panics() {
         let store = KvStore::new();
+        store.table_by::<index::Users::name>(OWNER).init().unwrap();
         store
-            .table_by::<indexes::Users::name>(OWNER)
-            .init()
-            .unwrap();
-        store
-            .table_by::<indexes::Users::name>(OTHER)
+            .table_by::<index::Users::name>(OTHER)
             .insert(1, row("Alice"));
     }
 
@@ -633,11 +646,8 @@ mod test {
     #[should_panic(expected = "Ownership violation")]
     fn index_clear_wrong_owner_panics() {
         let store = KvStore::new();
-        store
-            .table_by::<indexes::Users::name>(OWNER)
-            .init()
-            .unwrap();
-        store.table_by::<indexes::Users::name>(OTHER).clear();
+        store.table_by::<index::Users::name>(OWNER).init().unwrap();
+        store.table_by::<index::Users::name>(OTHER).clear();
     }
 }
 
@@ -670,13 +680,13 @@ mod test_two_indexes {
             .insert(1, person("a@example.com", b"alice"));
         assert!(
             store
-                .table_by::<indexes::People::email>(OWNER)
+                .table_by::<index::People::email>(OWNER)
                 .get("a@example.com")
                 .is_some()
         );
         assert!(
             store
-                .table_by::<indexes::People::username>(OWNER)
+                .table_by::<index::People::username>(OWNER)
                 .get(b"alice".as_slice())
                 .is_some()
         );
@@ -686,17 +696,17 @@ mod test_two_indexes {
     fn both_indexes_queryable_after_email_index_insert() {
         let store = KvStore::new();
         store
-            .table_by::<indexes::People::email>(OWNER)
+            .table_by::<index::People::email>(OWNER)
             .insert(1, person("a@example.com", b"alice"));
         assert_eq!(
             store
-                .table_by::<indexes::People::email>(OWNER)
+                .table_by::<index::People::email>(OWNER)
                 .get("a@example.com"),
             Some(person("a@example.com", b"alice"))
         );
         assert_eq!(
             store
-                .table_by::<indexes::People::username>(OWNER)
+                .table_by::<index::People::username>(OWNER)
                 .get(b"alice".as_slice()),
             Some(person("a@example.com", b"alice"))
         );
@@ -706,17 +716,17 @@ mod test_two_indexes {
     fn both_indexes_queryable_after_username_index_insert() {
         let store = KvStore::new();
         store
-            .table_by::<indexes::People::username>(OWNER)
+            .table_by::<index::People::username>(OWNER)
             .insert(1, person("a@example.com", b"alice"));
         assert_eq!(
             store
-                .table_by::<indexes::People::email>(OWNER)
+                .table_by::<index::People::email>(OWNER)
                 .get("a@example.com"),
             Some(person("a@example.com", b"alice"))
         );
         assert_eq!(
             store
-                .table_by::<indexes::People::username>(OWNER)
+                .table_by::<index::People::username>(OWNER)
                 .get(b"alice".as_slice()),
             Some(person("a@example.com", b"alice"))
         );
@@ -734,13 +744,13 @@ mod test_two_indexes {
 
         assert_eq!(
             store
-                .table_by::<indexes::People::email>(OWNER)
+                .table_by::<index::People::email>(OWNER)
                 .get("a@example.com"),
             Some(person("a@example.com", b"alice"))
         );
         assert_eq!(
             store
-                .table_by::<indexes::People::username>(OWNER)
+                .table_by::<index::People::username>(OWNER)
                 .get(b"bob".as_slice()),
             Some(person("b@example.com", b"bob"))
         );
@@ -755,13 +765,13 @@ mod test_two_indexes {
         store.table::<People>(OWNER).remove(&1);
         assert!(
             store
-                .table_by::<indexes::People::email>(OWNER)
+                .table_by::<index::People::email>(OWNER)
                 .get("a@example.com")
                 .is_none()
         );
         assert!(
             store
-                .table_by::<indexes::People::username>(OWNER)
+                .table_by::<index::People::username>(OWNER)
                 .get(b"alice".as_slice())
                 .is_none()
         );
@@ -774,17 +784,17 @@ mod test_two_indexes {
             .table::<People>(OWNER)
             .insert(1, person("a@example.com", b"alice"));
         store
-            .table_by::<indexes::People::email>(OWNER)
+            .table_by::<index::People::email>(OWNER)
             .remove("a@example.com");
         assert!(
             store
-                .table_by::<indexes::People::email>(OWNER)
+                .table_by::<index::People::email>(OWNER)
                 .get("a@example.com")
                 .is_none()
         );
         assert!(
             store
-                .table_by::<indexes::People::username>(OWNER)
+                .table_by::<index::People::username>(OWNER)
                 .get(b"alice".as_slice())
                 .is_none()
         );
@@ -797,17 +807,17 @@ mod test_two_indexes {
             .table::<People>(OWNER)
             .insert(1, person("a@example.com", b"alice"));
         store
-            .table_by::<indexes::People::username>(OWNER)
+            .table_by::<index::People::username>(OWNER)
             .remove(b"alice".as_slice());
         assert!(
             store
-                .table_by::<indexes::People::email>(OWNER)
+                .table_by::<index::People::email>(OWNER)
                 .get("a@example.com")
                 .is_none()
         );
         assert!(
             store
-                .table_by::<indexes::People::username>(OWNER)
+                .table_by::<index::People::username>(OWNER)
                 .get(b"alice".as_slice())
                 .is_none()
         );
@@ -820,7 +830,7 @@ mod test_two_indexes {
             .table::<People>(OWNER)
             .insert(1, person("a@example.com", b"alice"));
         store
-            .table_by::<indexes::People::email>(OWNER)
+            .table_by::<index::People::email>(OWNER)
             .remove("a@example.com");
         assert!(store.table::<People>(OWNER).get(&1).is_none());
     }

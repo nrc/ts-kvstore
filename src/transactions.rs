@@ -1,7 +1,7 @@
 //! KvStore transactional API.
 
 use crate::{
-    Error, KvStore, Owner, Result, TableIterator, iter, schema,
+    KvStore, Owner, Result, TableIterator, iter, schema,
     singleton::{OptSingletonValue, assert_owner},
     storage::{SinValue, Storage},
 };
@@ -70,7 +70,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     // TODO single-table transactions?
 }
 
-/// A read/write transaction over a [`KvStore`]`.
+/// A read/write transaction over a [`KvStore`].
 ///
 /// Create a transaction by calling [`KvStore::begin_transaction`] or [`KvStore::try_begin_transaction`].
 /// A transaction holds a write lock on the whole store while it is active so ensure that code within
@@ -228,13 +228,7 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
     pub fn init(&mut self) -> Result<()> {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
-        match &table.owner {
-            Some(owner) => Err(Error::AlreadyInit(owner)),
-            None => {
-                table.owner = Some(self.txn.owner);
-                Ok(())
-            }
-        }
+        table.try_set_owner(self.txn.owner)
     }
 
     /// Clear a table by removing all its KVs, but preserving ownership.
@@ -406,12 +400,12 @@ impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
     }
 }
 
-/// A read-only transaction over a [`KvStore`]`.
+/// A read-only transaction over a [`KvStore`].
 ///
 /// Create a read-only transaction by calling [`KvStore::begin_ro_transaction`] or [`KvStore::try_begin_ro_transaction`].
 /// A read-only transaction holds a read lock on the whole store while it is active so ensure that
-/// code within a transaction is relatively quick to execute and that you drop transactionss as soon
-/// as possible([`RoTransaction::commit`] can be used for this)..
+/// code within a transaction is relatively quick to execute and that you drop transactions as soon
+/// as possible([`RoTransaction::commit`] can be used for this).
 ///
 /// A transaction must not be kept alive over an `await` point. This can lead to deadlock.
 pub struct RoTransaction<'a, TableStorage: schema::GeneratedStorage> {

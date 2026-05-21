@@ -55,16 +55,12 @@ impl<
             inner: None,
             _kind: PhantomData,
         };
-        let tables: *const _ = &result.guard.tables;
-        // SAFETY: here we're extending the lifetime of the reference to the KV storage to `'a`.
-        // We can't use a raw pointer because we won't be able to use that as input to create an
-        // iterator. To ensure safety we must ensure that `self.guard` outlives `self.inner`. We can
-        // outlive the temporary because guard is a pointer, so even if the temporary is dropped and
-        // `result` is moved, `&result.guard.tables` will point at the same address which is guaranteed
-        // to outlive `'a`.
-        let tables = unsafe { tables.as_ref_unchecked() };
-        result.inner = Some(D::get_table(tables).data.iter());
+        result.inner = Some(inner_iter::<_, _, D>(&result.guard));
         result
+    }
+
+    fn inner_next(&mut self) -> Option<(&D::Key, &D::Value)> {
+        self.inner.as_mut().unwrap().next()
     }
 }
 
@@ -82,11 +78,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         // Iterate by delegating to the `HashMap` iterator.
-        self.inner
-            .as_mut()
-            .unwrap()
-            .next()
-            .map(|(k, v)| (k.clone(), v.clone()))
+        self.inner_next().map(|(k, v)| (k.clone(), v.clone()))
     }
 }
 
@@ -103,7 +95,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         // Iterate by delegating to the `HashMap` iterator.
-        self.inner.as_mut().unwrap().next().map(|(k, _)| k.clone())
+        self.inner_next().map(|(k, _)| k.clone())
     }
 }
 
@@ -120,7 +112,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         // Iterate by delegating to the `HashMap` iterator.
-        self.inner.as_mut().unwrap().next().map(|(_, v)| v.clone())
+        self.inner_next().map(|(_, v)| v.clone())
     }
 }
 impl<
@@ -169,15 +161,7 @@ impl<
     /// Create an iterator over the table described by `D` (the index).
     pub(crate) fn new(guard: Guard) -> Self {
         let mut result = IndexIterator { guard, inner: None };
-        let tables: *const _ = &result.guard.tables;
-        // SAFETY: here we're extending the lifetime of the reference to the KV storage to `'a`.
-        // We can't use a raw pointer because we won't be able to use that as input to create an
-        // iterator. To ensure safety we must ensure that `self.guard` outlives `self.inner`. We can
-        // outlive the temporary because guard is a pointer, so even if the temporary is dropped and
-        // `result` is moved, `&result.guard.tables` will point at the same address which is guaranteed
-        // to outlive `'a`.
-        let tables = unsafe { tables.as_ref_unchecked() };
-        result.inner = Some(D::get_table(tables).data.iter());
+        result.inner = Some(inner_iter::<_, _, D>(&result.guard));
         result
     }
 }
@@ -217,4 +201,25 @@ impl<
         // Ensure that `self.inner` is dropped before `self.guard`.
         self.inner = None;
     }
+}
+
+// Create an iterator over a table's data to use as a base for these iterators.
+fn inner_iter<
+    'a,
+    Guard: Deref<Target = Storage<TableStorage>> + 'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: TableDesc<Storage = TableStorage> + 'a,
+>(
+    guard: &Guard,
+) -> std::collections::hash_map::Iter<'a, D::Key, D::Value> {
+    let tables: *const _ = &guard.tables;
+    // SAFETY: here we're extending the lifetime of the reference to the KV storage to `'a`.
+    // We can't use a raw pointer because we won't be able to use that as input to create an
+    // iterator. To ensure safety we must ensure that `self.guard` outlives `self.inner`. We can
+    // outlive the temporary because guard holds a pointer to the storage and `tables` follows that
+    // pointer (via the `Deref` impl) to the tables field. So even if the temporary is dropped and
+    // `result` is moved, `&result.guard.tables` will point at the same address which is guaranteed
+    // to outlive `'a`.
+    let tables = unsafe { tables.as_ref_unchecked() };
+    D::get_table(tables).data.iter()
 }

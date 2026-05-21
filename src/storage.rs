@@ -1,4 +1,4 @@
-use crate::{Owner, schema};
+use crate::{Error, Owner, Result, schema};
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -83,7 +83,17 @@ impl<D: schema::TableDesc, I: Default> Default for Table<D, I> {
 }
 
 impl<D: schema::TableDesc, I: Default> Table<D, I> {
-    pub fn assert_or_set_owner(&mut self, owner: Owner) {
+    pub(crate) fn try_set_owner(&mut self, owner: Owner) -> Result<()> {
+        match &self.owner {
+            Some(owner) => Err(Error::AlreadyInit(owner)),
+            None => {
+                self.owner = Some(owner);
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn assert_or_set_owner(&mut self, owner: Owner) {
         match &self.owner {
             Some(prev_owner) => debug_assert_eq!(
                 *prev_owner, owner,
@@ -95,7 +105,7 @@ impl<D: schema::TableDesc, I: Default> Table<D, I> {
         }
     }
 
-    pub fn assert_owner(&mut self, owner: Owner) {
+    pub(crate) fn assert_owner(&mut self, owner: Owner) {
         if let Some(prev_owner) = &self.owner {
             debug_assert_eq!(
                 *prev_owner, owner,

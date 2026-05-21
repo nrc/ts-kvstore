@@ -1,7 +1,7 @@
 //! KvStore non-transactional API.
 
 use crate::{
-    Error, KvStore, Owner, Result,
+    KvStore, Owner, Result,
     iter::{self, TableIterator},
     schema::{self, IndexStorage},
     singleton::{OptSingletonValue, assert_owner},
@@ -164,13 +164,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     pub fn init(&self) -> Result<()> {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
-        match &table.owner {
-            Some(owner) => Err(Error::AlreadyInit(owner)),
-            None => {
-                table.owner = Some(self.owner);
-                Ok(())
-            }
-        }
+        table.try_set_owner(self.owner)
     }
 
     /// Iterate all the key/value pairs in a table.

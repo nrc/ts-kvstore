@@ -1,5 +1,5 @@
 use crate::{
-    Error, KvStore, Owner, Result,
+    KvStore, Owner, Result,
     iter::IndexIterator,
     schema::{self, IndexDesc, IndexStorage, TableDesc},
 };
@@ -13,7 +13,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// ```rust,ignore
     /// let value = store.table_by::<index::Foo::bar>(OWNER).get(key).unwrap();
     /// ```
-    /// 
+    ///
     /// Here `Foo` describes a tables and `bar` describes an index over `Foo` using the `bar` field
     /// as foreign key.
     pub fn table_by<'a, D: schema::IndexDesc<Storage = TableStorage>>(
@@ -36,16 +36,19 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
 ///
 /// `D` describes the index table.
 /// `B` describes the base table.
+///
+/// SAFETY: `D` and `B` must describe different tables (this is enforced by the macros, but possible
+/// to violate if building a schema by hand).
 pub struct KvTableIndex<
     'a,
     TableStorage: schema::GeneratedStorage,
     D: IndexDesc<Storage = TableStorage, BaseTable = B>,
     B: TableDesc<Storage = TableStorage>,
 > {
-    pub store: &'a KvStore<TableStorage>,
-    pub owner: Owner,
-    pub index: PhantomData<D>,
-    pub base: PhantomData<B>,
+    store: &'a KvStore<TableStorage>,
+    owner: Owner,
+    index: PhantomData<D>,
+    base: PhantomData<B>,
 }
 
 impl<
@@ -65,13 +68,7 @@ impl<
     pub fn init(&self) -> Result<()> {
         let mut storage = self.store.storage.write().unwrap();
         let base = D::BaseTable::get_table_mut(&mut storage.tables);
-        match &base.owner {
-            Some(owner) => Err(Error::AlreadyInit(owner)),
-            None => {
-                base.owner = Some(self.owner);
-                Ok(())
-            }
-        }
+        base.try_set_owner(self.owner)
     }
 
     /// Iterate all the keys in the index and value in the base table.
@@ -107,7 +104,10 @@ impl<
     pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut B::Value)) {
         let mut storage = self.store.storage.write().unwrap();
         let tables: *mut _ = &mut storage.tables;
-        // SAFETY: TODO
+        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
+        // different `Table` objects. Although the compiler treats `base` and `index` as having
+        // a reference to `storage.tables`, they do not, so the references here are transient and
+        // all mutable references are unique.
         let base = B::get_table_mut(unsafe { tables.as_mut_unchecked() });
         let index = D::get_table(&storage.tables);
 
@@ -202,14 +202,16 @@ impl<
         let mut storage = self.store.storage.write().unwrap();
         let index = D::get_table(&storage.tables);
         let base_key: *const <B as TableDesc>::Key = index.data.get(key)? as *const _;
+        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
+        // different `Table` objects. `base_key` is a pointer into `index` and cannot be a pointer
+        // into `base`.
+        let base_key = unsafe { base_key.as_ref_unchecked() };
         let base = B::get_table_mut(&mut storage.tables);
-        // SAFETY: TODO
-        let value = base.data.get_mut(unsafe { base_key.as_ref_unchecked() })?;
+        let value = base.data.get_mut(base_key)?;
         // TODO we could be more efficient and only update indexes if the foreign key changes
         base.indexes.on_remove(value);
         let result = f(value);
-        base.indexes
-            .on_insert(unsafe { base_key.as_ref_unchecked() }, value);
+        base.indexes.on_insert(base_key, value);
 
         Some(result)
     }

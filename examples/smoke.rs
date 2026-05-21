@@ -31,12 +31,12 @@ pub fn main() {
 
     assert_eq!(nodes.len(), 4);
 
-    edges.iter().for_each(|(k, (a, b))| {
-        let a_name = match nodes.get(a) {
+    edges.iter_cloned().for_each(|(k, (a, b))| {
+        let a_name = match nodes.get(&a) {
             Some(s) => format!(" ({s})"),
             None => String::new(),
         };
-        let b_name = match nodes.get(b) {
+        let b_name = match nodes.get(&b) {
             Some(s) => format!(" ({s})"),
             None => String::new(),
         };

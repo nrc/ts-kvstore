@@ -3,7 +3,7 @@
 use crate::{
     Error, KvStore, Owner, Result,
     index::KvTableIndex,
-    iter::TableIterator,
+    iter::{self, TableIterator},
     schema::{self, IndexStorage},
     singleton::{OptSingletonValue, assert_owner},
     storage::SinValue,
@@ -186,16 +186,66 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     }
 
     /// Iterate all the key/value pairs in a table.
-    pub fn iter(&'a self) -> impl Iterator<Item = (&'a D::Key, &'a D::Value)>
+    ///
+    /// Clones both keys and values and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_cloned(&'a self) -> impl Iterator<Item = (D::Key, D::Value)>
     where
-        TableStorage: 'static,
-        D: 'static,
+        D::Key: Clone,
+        D::Value: Clone,
     {
         let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D>::new(guard)
+        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::KeysAndValues>::new(
+            guard,
+        )
     }
 
-    /// Clear a table by removing all its KVs, but preserving ownership.
+    /// Iterate all the keys in a table.
+    ///
+    /// Clones the keys and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_keys_cloned(&'a self) -> impl Iterator<Item = D::Key>
+    where
+        D::Key: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Keys>::new(guard)
+    }
+
+    /// Iterate all the values in a table.
+    ///
+    /// Clones values and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_values_cloned(&'a self) -> impl Iterator<Item = D::Value>
+    where
+        D::Value: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Values>::new(guard)
+    }
+
+    /// Iterate all the key/value pairs in a table.
+    ///
+    /// We're not able to make this an iterator because we have to ensure that the references do
+    /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
+    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &D::Value)) {
+        let storage = self.store.storage.read().unwrap();
+        let table = D::get_table(&storage.tables);
+        for (k, v) in &table.data {
+            f(k, v);
+        }
+    }
+
+    /// Iterate all the key/value pairs in a table. Values are mutable.
+    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut D::Value)) {
+        let mut storage = self.store.storage.write().unwrap();
+        let table = D::get_table_mut(&mut storage.tables);
+        for (k, v) in &mut table.data {
+            f(k, v);
+        }
+    }
+
+    /// Clear a table by removing all its KVs, but preserve ownership.
     pub fn clear(&self) {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
@@ -767,7 +817,7 @@ mod test {
     fn table_iter_empty_on_fresh_store() {
         let store = KvStore::new();
         let table = store.table::<Items>(OWNER);
-        let items: Vec<_> = table.iter().collect();
+        let items: Vec<_> = table.iter_cloned().collect();
         assert!(items.is_empty());
     }
 
@@ -777,7 +827,7 @@ mod test {
         let table = store.table::<Items>(OWNER);
         table.insert("a", "alpha".to_owned());
         table.insert("b", "beta".to_owned());
-        let mut items: Vec<_> = table.iter().map(|(&k, v)| (k, v.clone())).collect();
+        let mut items: Vec<_> = table.iter_cloned().collect();
         items.sort();
         assert_eq!(
             items,
@@ -794,8 +844,88 @@ mod test {
             v.clear();
             v.push_str("v2");
         });
-        let items: Vec<_> = table.iter().map(|(&k, v)| (k, v.clone())).collect();
+        let items: Vec<_> = table.iter_cloned().collect();
         assert_eq!(items, vec![("k", "v2".to_owned())]);
+    }
+
+    #[test]
+    fn table_for_each_empty_calls_closure_zero_times() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        let mut count = 0;
+        table.for_each(|_, _| count += 1);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn table_for_each_yields_all_rows() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        table.insert("a", "alpha".to_owned());
+        table.insert("b", "beta".to_owned());
+        let mut items: Vec<_> = Vec::new();
+        table.for_each(|k, v| items.push((*k, v.clone())));
+        items.sort();
+        assert_eq!(
+            items,
+            vec![("a", "alpha".to_owned()), ("b", "beta".to_owned())]
+        );
+    }
+
+    #[test]
+    fn table_for_each_mut_empty_calls_closure_zero_times() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        let mut count = 0;
+        table.for_each_mut(|_, _| count += 1);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn table_for_each_mut_modifies_values() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        table.insert("k", "hello".to_owned());
+        table.for_each_mut(|_, v| v.push('!'));
+        assert_eq!(table.get("k"), Some("hello!".to_owned()));
+    }
+
+    #[test]
+    fn table_iter_keys_cloned_empty() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        let keys: Vec<_> = table.iter_keys_cloned().collect();
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn table_iter_keys_cloned_yields_all_keys() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        table.insert("a", "alpha".to_owned());
+        table.insert("b", "beta".to_owned());
+        let mut keys: Vec<_> = table.iter_keys_cloned().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn table_iter_values_cloned_empty() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        let values: Vec<_> = table.iter_values_cloned().collect();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn table_iter_values_cloned_yields_all_values() {
+        let store = KvStore::new();
+        let table = store.table::<Items>(OWNER);
+        table.insert("a", "alpha".to_owned());
+        table.insert("b", "beta".to_owned());
+        let mut values: Vec<_> = table.iter_values_cloned().collect();
+        values.sort();
+        assert_eq!(values, vec!["alpha".to_owned(), "beta".to_owned()]);
     }
 
     #[test]

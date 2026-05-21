@@ -44,14 +44,48 @@ impl<
     }
 
     /// Iterate all the keys in the index and value in the base table.
-    pub fn iter(&'a self) -> impl Iterator<Item = (&'a D::Key, &'a B::Value)>
+    ///
+    /// Clones both keys and values (but not the intermediate keys) and provides them by-value. To
+    /// iterate without cloning, see [`Self::for_each`].
+    pub fn iter_cloned(&'a self) -> impl Iterator<Item = (D::Key, B::Value)>
     where
-        TableStorage: 'static,
-        D: 'static,
-        B: 'static,
+        D::Key: Clone,
+        B::Value: Clone,
     {
         let guard = self.store.storage.read().unwrap();
         IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B>::new(guard)
+    }
+
+    /// Iterate all the keys in the index and value in the base table.
+    ///
+    /// We're not able to make this an iterator because we have to ensure that the references do
+    /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
+    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &B::Value)) {
+        let storage = self.store.storage.read().unwrap();
+        let base = B::get_table(&storage.tables);
+        let index = D::get_table(&storage.tables);
+        for (k, base_key) in &index.data {
+            let Some(v) = base.data.get(base_key) else {
+                continue;
+            };
+            f(k, v);
+        }
+    }
+
+    /// Iterate all the key/value pairs in a table. Values are mutable.
+    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut B::Value)) {
+        let mut storage = self.store.storage.write().unwrap();
+        let tables: *mut _ = &mut storage.tables;
+        // SAFETY: TODO
+        let base = B::get_table_mut(unsafe { tables.as_mut_unchecked() });
+        let index = D::get_table(&storage.tables);
+
+        for (k, base_key) in &index.data {
+            let Some(v) = base.data.get_mut(base_key) else {
+                continue;
+            };
+            f(k, v);
+        }
     }
 
     /// Clear the base table by removing all its KVs, but preserving ownership.
@@ -489,7 +523,7 @@ mod test {
     fn index_iter_empty_on_fresh_store() {
         let store = KvStore::new();
         let index = store.table_by::<indexes::Users::name>(OWNER);
-        let items: Vec<_> = index.iter().collect();
+        let items: Vec<_> = index.iter_cloned().collect();
         assert!(items.is_empty());
     }
 
@@ -499,7 +533,7 @@ mod test {
         store.table::<Users>(OWNER).insert(1, row("Alice"));
         let items: Vec<_> = store
             .table_by::<indexes::Users::name>(OWNER)
-            .iter()
+            .iter_cloned()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         assert_eq!(items, vec![("Alice".to_owned(), row("Alice"))]);
@@ -512,7 +546,7 @@ mod test {
         store.table::<Users>(OWNER).insert(2, row("Bob"));
         let mut items: Vec<_> = store
             .table_by::<indexes::Users::name>(OWNER)
-            .iter()
+            .iter_cloned()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         items.sort_by_key(|(k, _)| k.clone());
@@ -523,6 +557,61 @@ mod test {
                 ("Bob".to_owned(), row("Bob")),
             ]
         );
+    }
+
+    #[test]
+    fn index_for_each_empty_calls_closure_zero_times() {
+        let store = KvStore::new();
+        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let mut count = 0;
+        index.for_each(|_, _| count += 1);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn index_for_each_yields_index_key_and_base_value() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let mut items: Vec<_> = Vec::new();
+        index.for_each(|k, v| items.push((k.clone(), v.clone())));
+        assert_eq!(items, vec![("Alice".to_owned(), row("Alice"))]);
+    }
+
+    #[test]
+    fn index_for_each_yields_all_rows() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store.table::<Users>(OWNER).insert(2, row("Bob"));
+        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let mut items: Vec<_> = Vec::new();
+        index.for_each(|k, v| items.push((k.clone(), v.clone())));
+        items.sort_by_key(|(k, _)| k.clone());
+        assert_eq!(
+            items,
+            vec![
+                ("Alice".to_owned(), row("Alice")),
+                ("Bob".to_owned(), row("Bob")),
+            ]
+        );
+    }
+
+    #[test]
+    fn index_for_each_mut_empty_calls_closure_zero_times() {
+        let store = KvStore::new();
+        let index = store.table_by::<indexes::Users::name>(OWNER);
+        let mut count = 0;
+        index.for_each_mut(|_, _| count += 1);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn index_for_each_mut_modifies_base_values() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        let index = store.table_by::<indexes::Users::name>(OWNER);
+        index.for_each_mut(|_, v| v.name.push('!'));
+        assert_eq!(store.table::<Users>(OWNER).get(&1), Some(row("Alice!")));
     }
 
     #[test]

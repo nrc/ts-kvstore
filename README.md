@@ -7,7 +7,8 @@ TODO
   - iterators de-dup
 - secondary indexes
   - docs
-  - in transactions
+  - transactions
+  - values and keys iterators
 - pub/sub
   - subscribe/unsub
   - notifications

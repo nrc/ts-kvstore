@@ -4,10 +4,9 @@ TODO
 
 - secondary indexes
   - update on for_each_mut
-  - clear on clear
   - transactions
   - values and keys iterators
-  - with functions rather than field selection
+  - optionally with functions rather than field selection
   - should we panic on double insertions? We'd need to track in on_insert whether we expect an old value or not
   - do we need to support multi-indexes?
 - pub/sub

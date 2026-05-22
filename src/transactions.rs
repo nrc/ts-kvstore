@@ -1,7 +1,8 @@
 //! KvStore transactional API.
 
 use crate::{
-    KvStore, Owner, Result, TableIterator, iter, schema,
+    KvStore, Owner, Result, TableIterator, iter,
+    schema::{self, IndexStorage},
     singleton::{OptSingletonValue, assert_owner},
     storage::{SinValue, Storage},
 };
@@ -250,6 +251,7 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_or_set_owner(self.txn.owner);
+        table.indexes.clear();
         table.data.clear();
     }
 
@@ -384,6 +386,9 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
         for (k, v) in &mut table.data {
             f(k, v);
         }
+
+        table.indexes.clear();
+        table.indexes.build(table.data.iter());
     }
 }
 

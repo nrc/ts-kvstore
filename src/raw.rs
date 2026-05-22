@@ -209,6 +209,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_or_set_owner(self.owner);
+        table.indexes.clear();
         table.data.clear();
     }
 
@@ -349,6 +350,9 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         for (k, v) in &mut table.data {
             f(k, v);
         }
+
+        table.indexes.clear();
+        table.indexes.build(table.data.iter());
     }
 }
 

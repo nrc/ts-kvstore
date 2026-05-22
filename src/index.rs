@@ -207,6 +207,10 @@ impl<
             };
             f(k, v);
         }
+
+        // TODO we could be more efficient and only update indexes if the foreign key changes
+        base.indexes.clear();
+        base.indexes.build(base.data.iter());
     }
 }
 

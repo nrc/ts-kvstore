@@ -52,23 +52,35 @@ pub trait TableDesc: Sized {
     type Value: Any + Send + Sync;
     /// The storage for the table.
     type Storage: GeneratedStorage;
+    /// The storage type for keeping this tables indexes.
     type Indexes: IndexStorage<Self::Key, Self::Value>;
 
     fn get_table(storage: &Self::Storage) -> &Table<Self, Self::Indexes>;
     fn get_table_mut(storage: &mut Self::Storage) -> &mut Table<Self, Self::Indexes>;
 }
 
+/// Describes a table used as an index.
 pub trait IndexDesc: TableDesc {
+    /// The table which is indexed.
     type BaseTable: TableDesc<Storage = Self::Storage>;
 }
 
+/// Operations on an index.
 pub trait IndexStorage<K: Hash + Eq, V: Any + Send + Sync>: Default {
+    /// Clear the whole index.
     fn clear(&mut self);
+    /// An item has been inserted into the index.
     fn on_insert<Q>(&mut self, key: &Q, value: &V)
     where
         K: std::borrow::Borrow<Q>,
         Q: ?Sized + std::hash::Hash + Eq + std::borrow::ToOwned<Owned = K>;
+    /// An item has been removed from the index.
     fn on_remove(&mut self, value: &V);
+    /// Build the index from the base table.
+    fn build<'a>(&mut self, kvs: impl Iterator<Item = (&'a K, &'a V)>)
+    where
+        K: 'a,
+        V: 'a;
 }
 
 impl<K: Hash + Eq, V: Any + Send + Sync> IndexStorage<K, V> for () {
@@ -80,6 +92,12 @@ impl<K: Hash + Eq, V: Any + Send + Sync> IndexStorage<K, V> for () {
     {
     }
     fn on_remove(&mut self, _value: &V) {}
+    fn build<'a>(&mut self, _kvs: impl Iterator<Item = (&'a K, &'a V)>)
+    where
+        K: 'a,
+        V: 'a,
+    {
+    }
 }
 
 /// Marker trait to indicate a storage implementation.
@@ -355,8 +373,11 @@ macro_rules! tables {
                     )*
                 }
 
-                fn on_insert<Q>(&mut self, _key: &Q, _value: &$value_ty) where $key_ty: std::borrow::Borrow<Q>,
-        Q: ?Sized + std::hash::Hash + Eq + std::borrow::ToOwned<Owned = $key_ty> {
+                fn on_insert<Q>(&mut self, _key: &Q, _value: &$value_ty)
+                where
+                    $key_ty: std::borrow::Borrow<Q>,
+                    Q: ?Sized + std::hash::Hash + Eq + std::borrow::ToOwned<Owned = $key_ty>
+                {
                     $(
                         self.$field.data.insert(_value.$field.clone(), _key.to_owned());
                     )*
@@ -366,6 +387,18 @@ macro_rules! tables {
                     $(
                         self.$field.data.remove(&_value.$field);
                     )*
+                }
+
+                fn build<'a>(&mut self, kvs: impl Iterator<Item = (&'a $key_ty, &'a $value_ty)>)
+                where
+                    $key_ty: 'a,
+                    $value_ty: 'a,
+                {
+                    for (_k, _v) in kvs {
+                        $(
+                            self.$field.data.insert(_v.$field.clone(), _k.to_owned());
+                        )*
+                    }
                 }
             }
         )*

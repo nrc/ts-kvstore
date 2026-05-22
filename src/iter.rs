@@ -140,6 +140,7 @@ pub struct IndexIterator<
     TableStorage: schema::GeneratedStorage + 'a,
     D: IndexDesc<Storage = TableStorage, BaseTable = B> + 'a,
     B: TableDesc<Storage = TableStorage>,
+    Kind,
 > {
     /// Guard on the KV store's storage (all of it).
     guard: Guard,
@@ -148,6 +149,7 @@ pub struct IndexIterator<
     /// Invariants:
     ///   - `inner.is_some()` once `new` has completed.
     inner: Option<std::collections::hash_map::Iter<'a, D::Key, D::Value>>,
+    _kind: PhantomData<Kind>,
 }
 
 impl<
@@ -156,11 +158,16 @@ impl<
     TableStorage: schema::GeneratedStorage + 'a,
     D: IndexDesc<Storage = TableStorage, BaseTable = B> + 'a,
     B: TableDesc<Storage = TableStorage>,
-> IndexIterator<'a, Guard, TableStorage, D, B>
+    Kind,
+> IndexIterator<'a, Guard, TableStorage, D, B, Kind>
 {
     /// Create an iterator over the table described by `D` (the index).
     pub(crate) fn new(guard: Guard) -> Self {
-        let mut result = IndexIterator { guard, inner: None };
+        let mut result = IndexIterator {
+            guard,
+            inner: None,
+            _kind: PhantomData,
+        };
         result.inner = Some(inner_iter::<_, _, D>(&result.guard));
         result
     }
@@ -172,7 +179,7 @@ impl<
     TableStorage: schema::GeneratedStorage + 'a,
     D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
     B: TableDesc<Storage = TableStorage>,
-> Iterator for IndexIterator<'a, Guard, TableStorage, D, B>
+> Iterator for IndexIterator<'a, Guard, TableStorage, D, B, KeysAndValues>
 where
     D::Key: Clone,
     B::Value: Clone,
@@ -193,9 +200,50 @@ impl<
     'a,
     Guard: Deref<Target = Storage<TableStorage>> + 'a,
     TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage>,
+> Iterator for IndexIterator<'a, Guard, TableStorage, D, B, Keys>
+where
+    D::Key: Clone,
+{
+    type Item = D::Key;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Iterate by delegating to the `HashMap` iterator.
+        self.inner.as_mut().unwrap().next().map(|(k, _)| k.clone())
+    }
+}
+
+impl<
+    'a,
+    Guard: Deref<Target = Storage<TableStorage>> + 'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage>,
+> Iterator for IndexIterator<'a, Guard, TableStorage, D, B, Values>
+where
+    B::Value: Clone,
+{
+    type Item = B::Value;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Iterate by delegating to the `HashMap` iterator.
+        self.inner.as_mut().unwrap().next().and_then(|(_, bk)| {
+            let tables = &self.guard.tables;
+            let base = B::get_table(tables);
+            Some(base.data.get(bk)?.clone())
+        })
+    }
+}
+
+impl<
+    'a,
+    Guard: Deref<Target = Storage<TableStorage>> + 'a,
+    TableStorage: schema::GeneratedStorage + 'a,
     D: IndexDesc<Storage = TableStorage, BaseTable = B> + 'a,
     B: TableDesc<Storage = TableStorage>,
-> Drop for IndexIterator<'a, Guard, TableStorage, D, B>
+    Kind,
+> Drop for IndexIterator<'a, Guard, TableStorage, D, B, Kind>
 {
     fn drop(&mut self) {
         // Ensure that `self.inner` is dropped before `self.guard`.

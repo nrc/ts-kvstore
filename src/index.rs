@@ -1,6 +1,6 @@
 use crate::{
     KvStore, Owner, Result,
-    iter::IndexIterator,
+    iter::{self, IndexIterator},
     schema::{self, IndexDesc, IndexStorage, TableDesc},
 };
 use std::{borrow::Borrow, hash::Hash, marker::PhantomData, sync::RwLockReadGuard};
@@ -171,7 +171,33 @@ impl<
         B::Value: Clone,
     {
         let guard = self.store.storage.read().unwrap();
-        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B>::new(guard)
+        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B, iter::KeysAndValues>::new(
+            guard,
+        )
+    }
+
+    /// Iterate all the keys in the index.
+    ///
+    /// Clones the keys and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_keys_cloned(&'a self) -> impl Iterator<Item = D::Key>
+    where
+        D::Key: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B, iter::Keys>::new(guard)
+    }
+
+    /// Iterate all the values in the base table.
+    ///
+    /// Clones values and provides them by-value. To iterate without cloning, see
+    /// [`Self::for_each`].
+    pub fn iter_values_cloned(&'a self) -> impl Iterator<Item = B::Value>
+    where
+        B::Value: Clone,
+    {
+        let guard = self.store.storage.read().unwrap();
+        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B, iter::Values>::new(guard)
     }
 
     /// Iterate all the keys in the index and value in the base table.

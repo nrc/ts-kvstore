@@ -4,8 +4,6 @@
 use crate::storage::{SinValue, Table};
 use std::{any::Any, hash::Hash, sync::Arc};
 
-// TODO it would be nice if we could just use the type of the value as the key, but that has
-// problems with the orphan rule.
 /// A singleton key/value.
 ///
 /// Prefer to use the macros in this module rather than this trait directly.

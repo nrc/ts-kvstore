@@ -544,6 +544,19 @@ mod test {
     }
 
     #[test]
+    fn base_clear_removes_index_entries() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store.table::<Users>(OWNER).clear();
+        assert!(
+            store
+                .table_by::<index::Users::name>(OWNER)
+                .get("Alice")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn index_iter_empty_on_fresh_store() {
         let store = KvStore::new();
         let index = store.table_by::<index::Users::name>(OWNER);
@@ -581,6 +594,52 @@ mod test {
                 ("Bob".to_owned(), row("Bob")),
             ]
         );
+    }
+
+    #[test]
+    fn index_iter_keys_cloned_empty() {
+        let store = KvStore::new();
+        let keys: Vec<_> = store
+            .table_by::<index::Users::name>(OWNER)
+            .iter_keys_cloned()
+            .collect();
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn index_iter_keys_cloned_yields_index_keys() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store.table::<Users>(OWNER).insert(2, row("Bob"));
+        let mut keys: Vec<_> = store
+            .table_by::<index::Users::name>(OWNER)
+            .iter_keys_cloned()
+            .collect();
+        keys.sort();
+        assert_eq!(keys, vec!["Alice".to_owned(), "Bob".to_owned()]);
+    }
+
+    #[test]
+    fn index_iter_values_cloned_empty() {
+        let store = KvStore::new();
+        let values: Vec<_> = store
+            .table_by::<index::Users::name>(OWNER)
+            .iter_values_cloned()
+            .collect();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn index_iter_values_cloned_yields_base_values() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store.table::<Users>(OWNER).insert(2, row("Bob"));
+        let mut values: Vec<_> = store
+            .table_by::<index::Users::name>(OWNER)
+            .iter_values_cloned()
+            .collect();
+        values.sort_by_key(|r| r.name.clone());
+        assert_eq!(values, vec![row("Alice"), row("Bob")]);
     }
 
     #[test]
@@ -636,6 +695,44 @@ mod test {
         let index = store.table_by::<index::Users::name>(OWNER);
         index.for_each_mut(|_, v| v.name.push('!'));
         assert_eq!(store.table::<Users>(OWNER).get(&1), Some(row("Alice!")));
+    }
+
+    #[test]
+    fn table_for_each_mut_updates_index() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store
+            .table::<Users>(OWNER)
+            .for_each_mut(|_, v| v.name = "Charlie".to_owned());
+        assert!(
+            store
+                .table_by::<index::Users::name>(OWNER)
+                .get("Alice")
+                .is_none()
+        );
+        assert_eq!(
+            store.table_by::<index::Users::name>(OWNER).get("Charlie"),
+            Some(row("Charlie"))
+        );
+    }
+
+    #[test]
+    fn index_for_each_mut_updates_index() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store
+            .table_by::<index::Users::name>(OWNER)
+            .for_each_mut(|_, v| v.name = "Charlie".to_owned());
+        assert!(
+            store
+                .table_by::<index::Users::name>(OWNER)
+                .get("Alice")
+                .is_none()
+        );
+        assert_eq!(
+            store.table_by::<index::Users::name>(OWNER).get("Charlie"),
+            Some(row("Charlie"))
+        );
     }
 
     #[test]
@@ -841,5 +938,121 @@ mod test_two_indexes {
             .table_by::<index::People::email>(OWNER)
             .remove("a@example.com");
         assert!(store.table::<People>(OWNER).get(&1).is_none());
+    }
+
+    #[test]
+    fn base_clear_clears_both_indexes() {
+        let store = KvStore::new();
+        store
+            .table::<People>(OWNER)
+            .insert(1, person("a@example.com", b"alice"));
+        store.table::<People>(OWNER).clear();
+        assert!(
+            store
+                .table_by::<index::People::email>(OWNER)
+                .get("a@example.com")
+                .is_none()
+        );
+        assert!(
+            store
+                .table_by::<index::People::username>(OWNER)
+                .get(b"alice".as_slice())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn email_index_clear_clears_both_indexes() {
+        let store = KvStore::new();
+        store
+            .table::<People>(OWNER)
+            .insert(1, person("a@example.com", b"alice"));
+        store.table_by::<index::People::email>(OWNER).clear();
+        assert!(
+            store
+                .table_by::<index::People::email>(OWNER)
+                .get("a@example.com")
+                .is_none()
+        );
+        assert!(
+            store
+                .table_by::<index::People::username>(OWNER)
+                .get(b"alice".as_slice())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn table_for_each_mut_updates_both_indexes() {
+        let store = KvStore::new();
+        store
+            .table::<People>(OWNER)
+            .insert(1, person("a@example.com", b"alice"));
+        store.table::<People>(OWNER).for_each_mut(|_, v| {
+            v.email = "b@example.com".to_owned();
+            v.username = b"bob".to_vec();
+        });
+        assert!(
+            store
+                .table_by::<index::People::email>(OWNER)
+                .get("a@example.com")
+                .is_none()
+        );
+        assert!(
+            store
+                .table_by::<index::People::username>(OWNER)
+                .get(b"alice".as_slice())
+                .is_none()
+        );
+        assert!(
+            store
+                .table_by::<index::People::email>(OWNER)
+                .get("b@example.com")
+                .is_some()
+        );
+        assert!(
+            store
+                .table_by::<index::People::username>(OWNER)
+                .get(b"bob".as_slice())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn email_index_for_each_mut_updates_both_indexes() {
+        let store = KvStore::new();
+        store
+            .table::<People>(OWNER)
+            .insert(1, person("a@example.com", b"alice"));
+        store
+            .table_by::<index::People::email>(OWNER)
+            .for_each_mut(|_, v| {
+                v.email = "b@example.com".to_owned();
+                v.username = b"bob".to_vec();
+            });
+        assert!(
+            store
+                .table_by::<index::People::email>(OWNER)
+                .get("a@example.com")
+                .is_none()
+        );
+        assert!(
+            store
+                .table_by::<index::People::username>(OWNER)
+                .get(b"alice".as_slice())
+                .is_none()
+        );
+        assert!(
+            store
+                .table_by::<index::People::email>(OWNER)
+                .get("b@example.com")
+                .is_some()
+        );
+        assert!(
+            store
+                .table_by::<index::People::username>(OWNER)
+                .get(b"bob".as_slice())
+                .is_some()
+        );
     }
 }

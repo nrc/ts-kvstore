@@ -1,7 +1,9 @@
 //! KvStore transactional API.
 
 use crate::{
-    KvStore, Owner, Result, TableIterator, iter,
+    KvStore, Owner, Result, TableIterator,
+    index::{KvTableRoTransactionalIndex, KvTableTransactionalIndex},
+    iter::{self, RefReadGuard, RefWriteGuard},
     schema::{self, IndexStorage},
     singleton::{OptSingletonValue, assert_owner},
     storage::{SinValue, Storage},
@@ -11,7 +13,6 @@ use std::{
     borrow::Borrow,
     hash::Hash,
     marker::PhantomData,
-    ops::Deref,
     sync::{Arc, RwLockReadGuard, RwLockWriteGuard, TryLockError},
 };
 
@@ -81,8 +82,8 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
 /// A transaction must not be kept alive over an `await` point. This can lead to deadlock.
 // TODO do we need to be able to abort a transaction?
 pub struct Transaction<'a, TableStorage: schema::GeneratedStorage> {
-    guard: RwLockWriteGuard<'a, Storage<TableStorage>>,
-    owner: Owner,
+    pub(crate) guard: RwLockWriteGuard<'a, Storage<TableStorage>>,
+    pub(crate) owner: Owner,
 }
 
 impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
@@ -100,7 +101,8 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
     ///
     /// Example:
     /// ```rust,ignore
-    /// let value = store.table(OWNER).get(key).unwrap();
+    /// let txn = store.begin_ro_transaction(OWNER);
+    /// let value = txn.table::<Foo>().get(key).unwrap();
     /// ```
     pub fn table<'t, D: schema::TableDesc<Storage = TableStorage>>(
         &'t mut self,
@@ -108,6 +110,27 @@ impl<'a, TableStorage: schema::GeneratedStorage> Transaction<'a, TableStorage> {
         KvTableTransactional {
             txn: self,
             table: PhantomData,
+        }
+    }
+
+    /// Access a table via an index.
+    ///
+    /// # Example:
+    ///
+    /// ```rust,ignore
+    /// let txn = store.begin_ro_transaction(OWNER);
+    /// let value = txn.table_by::<index::Foo::bar>(OWNER).get(foreign_key).unwrap();
+    /// ```
+    ///
+    /// Here `Foo` describes a tables and `bar` describes an index over `Foo` using the `bar` field
+    /// as foreign key.
+    pub fn table_by<'t, D: schema::IndexDesc<Storage = TableStorage>>(
+        &'t mut self,
+    ) -> KvTableTransactionalIndex<'a, 't, TableStorage, D, D::BaseTable> {
+        KvTableTransactionalIndex {
+            txn: self,
+            index: PhantomData,
+            base: PhantomData,
         }
     }
 
@@ -287,10 +310,14 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
     /// Insert a value into the table.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
-    pub fn insert(&mut self, key: D::Key, value: D::Value) -> Option<D::Value> {
+    pub fn insert(&mut self, key: D::Key, value: D::Value) -> Option<D::Value>
+    where
+        D::Key: Clone,
+    {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_or_set_owner(self.txn.owner);
+        table.indexes.on_insert(&key, &value);
         table.data.insert(key, value)
     }
 
@@ -300,14 +327,18 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
     pub fn mutate<Q, T>(&mut self, key: &Q, f: impl FnOnce(&mut D::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
-        Q: ?Sized + Hash + Eq,
+        Q: ?Sized + Hash + Eq + ToOwned<Owned = D::Key>,
     {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_owner(self.txn.owner);
         let value = table.data.get_mut(key)?;
 
-        Some(f(value))
+        table.indexes.on_remove(value);
+        let result = f(value);
+        table.indexes.on_insert(key, value);
+
+        Some(result)
     }
 
     /// Remove a row from the table.
@@ -321,7 +352,9 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
         table.assert_owner(self.txn.owner);
-        table.data.remove(key.borrow())
+        let value = table.data.remove(key.borrow())?;
+        table.indexes.on_remove(&value);
+        Some(value)
     }
 
     /// Iterate all the key/value pairs in a table.
@@ -383,25 +416,13 @@ impl<'a, 't, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storag
     pub fn for_each_mut(&mut self, mut f: impl FnMut(&D::Key, &mut D::Value)) {
         let storage = &mut self.txn.guard;
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_owner(self.txn.owner);
         for (k, v) in &mut table.data {
             f(k, v);
         }
 
         table.indexes.clear();
         table.indexes.build(table.data.iter());
-    }
-}
-
-/// Helper type for using a reference to a [`RwLockWriteGuard`] as a generic argument to
-/// [`TableIterator`]. Required because checking trait bounds does not take into account
-/// transitivity of `Deref`.
-struct RefWriteGuard<'r, 'a, T>(&'r RwLockWriteGuard<'a, T>);
-
-impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.deref()
     }
 }
 
@@ -414,8 +435,8 @@ impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
 ///
 /// A transaction must not be kept alive over an `await` point. This can lead to deadlock.
 pub struct RoTransaction<'a, TableStorage: schema::GeneratedStorage> {
-    guard: RwLockReadGuard<'a, Storage<TableStorage>>,
-    _owner: Owner,
+    pub(crate) guard: RwLockReadGuard<'a, Storage<TableStorage>>,
+    pub(crate) _owner: Owner,
 }
 
 impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
@@ -433,7 +454,8 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
     ///
     /// Example:
     /// ```rust,ignore
-    /// let value = store.table(OWNER).get(key).unwrap();
+    /// let txn = store.begin_ro_transaction(OWNER);
+    /// let value = txn.table::<Foo>().get(key).unwrap();
     /// ```
     pub fn table<'a, D: schema::TableDesc<Storage = TableStorage>>(
         &'a self,
@@ -441,6 +463,27 @@ impl<TableStorage: schema::GeneratedStorage> RoTransaction<'_, TableStorage> {
         KvTableRoTransactional {
             txn: self,
             table: PhantomData,
+        }
+    }
+
+    /// Access a table via an index.
+    ///
+    /// # Example:
+    ///
+    /// ```rust,ignore
+    /// let txn = store.begin_ro_transaction(OWNER);
+    /// let value = txn.table_by::<index::Foo::bar>(OWNER).get(foreign_key).unwrap();
+    /// ```
+    ///
+    /// Here `Foo` describes a tables and `bar` describes an index over `Foo` using the `bar` field
+    /// as foreign key.
+    pub fn table_by<'a, D: schema::IndexDesc<Storage = TableStorage>>(
+        &'a self,
+    ) -> KvTableRoTransactionalIndex<'a, TableStorage, D, D::BaseTable> {
+        KvTableRoTransactionalIndex {
+            txn: self,
+            index: PhantomData,
+            base: PhantomData,
         }
     }
 
@@ -590,19 +633,6 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         for (k, v) in &table.data {
             f(k, v);
         }
-    }
-}
-
-/// Helper type for using a reference to a [`RwLockReadGuard`] as a generic argument to
-/// [`TableIterator`]. Required because checking trait bounds does not take into account
-/// transitivity of `Deref`.
-struct RefReadGuard<'a, T>(&'a RwLockReadGuard<'a, T>);
-
-impl<'a, T> Deref for RefReadGuard<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.deref()
     }
 }
 
@@ -986,7 +1016,7 @@ mod test {
         let mut txn = store.begin_transaction(OWNER);
         let mut table = txn.table::<Items>();
         table.init().unwrap();
-        assert!(table.mutate("missing", |v| v.len()).is_none());
+        assert!(table.mutate(&"missing", |v| v.len()).is_none());
     }
 
     #[test]
@@ -995,7 +1025,7 @@ mod test {
         let mut txn = store.begin_transaction(OWNER);
         let mut table = txn.table::<Items>();
         table.insert("k", "hello".to_owned());
-        table.mutate("k", |v| v.push('!'));
+        table.mutate(&"k", |v| v.push('!'));
         assert_eq!(table.get("k"), Some("hello!".to_owned()));
     }
 
@@ -1184,7 +1214,7 @@ mod test {
         let store = KvStore::new();
         store.table::<Items>(OWNER).init().unwrap();
         let mut txn = store.begin_transaction(OTHER);
-        txn.table::<Items>().mutate("k", |v: &mut String| v.len());
+        txn.table::<Items>().mutate(&"k", |v: &mut String| v.len());
     }
 
     #[test]

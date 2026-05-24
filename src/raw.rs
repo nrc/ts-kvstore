@@ -347,6 +347,8 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut D::Value)) {
         let mut storage = self.store.storage.write().unwrap();
         let table = D::get_table_mut(&mut storage.tables);
+        table.assert_owner(self.owner);
+
         for (k, v) in &mut table.data {
             f(k, v);
         }

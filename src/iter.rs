@@ -4,7 +4,11 @@ use crate::{
     schema::{self, IndexDesc, TableDesc},
     storage::Storage,
 };
-use std::{marker::PhantomData, ops::Deref};
+use std::{
+    marker::PhantomData,
+    ops::Deref,
+    sync::{RwLockReadGuard, RwLockWriteGuard},
+};
 
 /// Phantom type to iterate over keys.
 #[doc(hidden)]
@@ -270,4 +274,30 @@ fn inner_iter<
     // to outlive `'a`.
     let tables = unsafe { tables.as_ref_unchecked() };
     D::get_table(tables).data.iter()
+}
+
+/// Helper type for using a reference to a [`RwLockWriteGuard`] as a generic argument to
+/// [`TableIterator`]. Required because checking trait bounds does not take into account
+/// transitivity of `Deref`.
+pub(crate) struct RefWriteGuard<'r, 'a, T>(pub(crate) &'r RwLockWriteGuard<'a, T>);
+
+impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+/// Helper type for using a reference to a [`RwLockReadGuard`] as a generic argument to
+/// [`TableIterator`]. Required because checking trait bounds does not take into account
+/// transitivity of `Deref`.
+pub(crate) struct RefReadGuard<'a, T>(pub(crate) &'a RwLockReadGuard<'a, T>);
+
+impl<'a, T> Deref for RefReadGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
 }

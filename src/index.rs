@@ -1428,3 +1428,307 @@ mod test_two_indexes {
         );
     }
 }
+
+#[cfg(test)]
+mod test_transactional_index {
+    use crate::tables;
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Row {
+        pub name: String,
+        pub age: u32,
+    }
+
+    fn row(name: &str) -> Row {
+        Row {
+            name: name.to_owned(),
+            age: 0,
+        }
+    }
+
+    tables!(Users(u32 => Row; index(name: String)));
+
+    const OWNER: &str = "owner";
+    #[cfg(debug_assertions)]
+    const OTHER: &str = "other";
+
+    // Group A: KvTableTransactionalIndex - index maintenance
+
+    #[test]
+    fn txn_index_get_returns_none_when_absent() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+    }
+
+    #[test]
+    fn txn_index_insert_is_visible_via_index() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Alice"),
+            Some(row("Alice"))
+        );
+    }
+
+    #[test]
+    fn txn_index_insert_is_visible_via_base() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        assert_eq!(txn.table::<Users>().get(&1), Some(row("Alice")));
+    }
+
+    #[test]
+    fn txn_index_with_returns_some_after_insert() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        assert_eq!(
+            txn.table_by::<index::Users::name>()
+                .with("Alice", |v| v.name.len()),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn txn_index_mutate_updates_index_on_field_change() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        txn.table_by::<index::Users::name>()
+            .mutate("Alice", |v| v.name = "Bob".to_owned());
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Bob"),
+            Some(Row {
+                name: "Bob".to_owned(),
+                age: 0
+            })
+        );
+    }
+
+    #[test]
+    fn txn_index_mutate_non_indexed_field_preserves_index() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        txn.table_by::<index::Users::name>()
+            .mutate("Alice", |v| v.age = 42);
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Alice"),
+            Some(Row {
+                name: "Alice".to_owned(),
+                age: 42
+            })
+        );
+    }
+
+    #[test]
+    fn txn_index_remove_removes_from_index() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        txn.table_by::<index::Users::name>().remove("Alice");
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+    }
+
+    #[test]
+    fn txn_index_remove_removes_from_base() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        txn.table_by::<index::Users::name>().remove("Alice");
+        assert!(txn.table::<Users>().get(&1).is_none());
+    }
+
+    #[test]
+    fn txn_index_clear_removes_from_index() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        txn.table_by::<index::Users::name>().insert(2, row("Bob"));
+        txn.table_by::<index::Users::name>().clear();
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+        assert!(txn.table_by::<index::Users::name>().get("Bob").is_none());
+    }
+
+    #[test]
+    fn txn_index_for_each_mut_updates_index_on_field_change() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+        txn.table_by::<index::Users::name>()
+            .for_each_mut(|_, v| v.name = "Charlie".to_owned());
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Charlie"),
+            Some(Row {
+                name: "Charlie".to_owned(),
+                age: 0
+            })
+        );
+    }
+
+    // Group B: KvTableTransactional (base table) - index maintenance
+
+    #[test]
+    fn txn_base_insert_updates_index() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table::<Users>().insert(1, row("Alice"));
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Alice"),
+            Some(row("Alice"))
+        );
+    }
+
+    #[test]
+    fn txn_base_mutate_updates_index_on_field_change() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table::<Users>().insert(1, row("Alice"));
+        txn.table::<Users>()
+            .mutate(&1, |v| v.name = "Bob".to_owned());
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Bob"),
+            Some(Row {
+                name: "Bob".to_owned(),
+                age: 0
+            })
+        );
+    }
+
+    #[test]
+    fn txn_base_remove_updates_index() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table::<Users>().insert(1, row("Alice"));
+        txn.table::<Users>().remove(&1);
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+    }
+
+    #[test]
+    fn txn_base_clear_updates_index() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table::<Users>().insert(1, row("Alice"));
+        txn.table::<Users>().insert(2, row("Bob"));
+        txn.table::<Users>().clear();
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+        assert!(txn.table_by::<index::Users::name>().get("Bob").is_none());
+    }
+
+    #[test]
+    fn txn_base_for_each_mut_updates_index_on_field_change() {
+        let store = KvStore::new();
+        let mut txn = store.begin_transaction(OWNER);
+        txn.table::<Users>().insert(1, row("Alice"));
+        txn.table::<Users>()
+            .for_each_mut(|_, v| v.name = "Charlie".to_owned());
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Charlie"),
+            Some(Row {
+                name: "Charlie".to_owned(),
+                age: 0
+            })
+        );
+    }
+
+    // Group C: KvTableRoTransactionalIndex - reads via index in RO transaction
+
+    #[test]
+    fn ro_txn_index_get_returns_none_when_absent() {
+        let store = KvStore::new();
+        let txn = store.begin_ro_transaction(OWNER);
+        assert!(txn.table_by::<index::Users::name>().get("Alice").is_none());
+    }
+
+    #[test]
+    fn ro_txn_index_get_returns_value_inserted_before_txn() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        let txn = store.begin_ro_transaction(OWNER);
+        assert_eq!(
+            txn.table_by::<index::Users::name>().get("Alice"),
+            Some(row("Alice"))
+        );
+    }
+
+    #[test]
+    fn ro_txn_index_with_returns_some() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        let txn = store.begin_ro_transaction(OWNER);
+        assert_eq!(
+            txn.table_by::<index::Users::name>()
+                .with("Alice", |v| v.name.len()),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn ro_txn_index_iter_cloned_yields_rows() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store.table::<Users>(OWNER).insert(2, row("Bob"));
+        let txn = store.begin_ro_transaction(OWNER);
+        let mut rows: Vec<_> = txn.table_by::<index::Users::name>().iter_cloned().collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            rows,
+            vec![
+                ("Alice".to_owned(), row("Alice")),
+                ("Bob".to_owned(), row("Bob")),
+            ]
+        );
+    }
+
+    #[test]
+    fn ro_txn_index_for_each_yields_rows() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).insert(1, row("Alice"));
+        store.table::<Users>(OWNER).insert(2, row("Bob"));
+        let txn = store.begin_ro_transaction(OWNER);
+        let mut names: Vec<String> = Vec::new();
+        txn.table_by::<index::Users::name>()
+            .for_each(|k, _| names.push(k.clone()));
+        names.sort();
+        assert_eq!(names, vec!["Alice".to_owned(), "Bob".to_owned()]);
+    }
+
+    // Group D: Ownership enforcement
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_index_insert_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).init().unwrap();
+        let mut txn = store.begin_transaction(OTHER);
+        txn.table_by::<index::Users::name>().insert(1, row("Alice"));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_index_clear_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).init().unwrap();
+        let mut txn = store.begin_transaction(OTHER);
+        txn.table_by::<index::Users::name>().clear();
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Ownership violation")]
+    fn txn_index_for_each_mut_wrong_owner_panics() {
+        let store = KvStore::new();
+        store.table::<Users>(OWNER).init().unwrap();
+        let mut txn = store.begin_transaction(OTHER);
+        txn.table_by::<index::Users::name>().for_each_mut(|_, _| {});
+    }
+}

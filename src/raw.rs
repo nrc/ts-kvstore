@@ -3,18 +3,51 @@
 use crate::{
     KvStore, Owner, Result,
     index::KvTableIndex,
-    iter::{self, TableIterator},
-    schema::{self, IndexStorage},
-    singleton::{OptSingletonValue, assert_owner},
-    storage::SinValue,
+    operations::{Ops, OpsMut, SingletonOps, SingletonOpsMut, TabularOps, TabularOpsMut},
+    schema,
+    storage::Storage,
 };
-use std::{
-    any::TypeId,
-    borrow::Borrow,
-    hash::Hash,
-    marker::PhantomData,
-    sync::{Arc, RwLockReadGuard},
-};
+use std::{borrow::Borrow, hash::Hash, marker::PhantomData, sync::Arc};
+
+impl<'a, TableStorage: schema::GeneratedStorage + 'a> SingletonOps<'a, TableStorage>
+    for &'a crate::KvStore<TableStorage>
+{
+}
+
+impl<'a, TableStorage: schema::GeneratedStorage + 'a> SingletonOpsMut<'a, 'a, TableStorage>
+    for &'a crate::KvStore<TableStorage>
+{
+}
+
+impl<'a, TableStorage: schema::GeneratedStorage + 'a, D: schema::TableDesc<Storage = TableStorage>>
+    Ops<'a, TableStorage> for &'a KvTable<'a, TableStorage, D>
+{
+    type ReadLock = std::sync::RwLockReadGuard<'a, Storage<TableStorage>>;
+
+    fn read_lock(self) -> Self::ReadLock {
+        self.store.storage.read().unwrap()
+    }
+}
+
+impl<'a, TableStorage: schema::GeneratedStorage + 'a, D: schema::TableDesc<Storage = TableStorage>>
+    TabularOps<'a, TableStorage, D> for &'a KvTable<'a, TableStorage, D>
+{
+}
+
+impl<'a, TableStorage: schema::GeneratedStorage + 'a, D: schema::TableDesc<Storage = TableStorage>>
+    OpsMut<'a, TableStorage> for &'a KvTable<'a, TableStorage, D>
+{
+    type WriteLock = std::sync::RwLockWriteGuard<'a, Storage<TableStorage>>;
+
+    fn write_lock(self) -> Self::WriteLock {
+        self.store.storage.write().unwrap()
+    }
+}
+
+impl<'a, TableStorage: schema::GeneratedStorage + 'a, D: schema::TableDesc<Storage = TableStorage>>
+    TabularOpsMut<'a, TableStorage, D> for &'a KvTable<'a, TableStorage, D>
+{
+}
 
 impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Operate on tables of key/values in the store.
@@ -60,26 +93,18 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Get a single value from the store by cloning the value.
     ///
     /// Returns `None` if there is no value for the specified key.
-    pub fn get<D: schema::Singleton>(&self, _owner: Owner) -> Option<D::Value>
+    pub fn get<D: schema::Singleton>(&self, owner: Owner) -> Option<D::Value>
     where
         D::Value: Clone,
     {
-        let storage = self.storage.read().unwrap();
-        let key = TypeId::of::<D>();
-        storage
-            .get_singleton_value(&key)
-            .map_singleton_value(|v| D::Value::clone(D::from_value_ref(v)))
+        <&Self as SingletonOps<'_, TableStorage>>::get::<D>(self, owner)
     }
 
     /// Get a single value from the store by cloning an `Arc`.
     ///
     /// Returns `None` if there is no value for the specified key. Panics if the value is not an `Arc`.
-    pub fn get_arc<D: schema::ArcSingleton>(&self, _owner: Owner) -> Option<Arc<D::Value>> {
-        let storage = self.storage.read().unwrap();
-        let key = TypeId::of::<D>();
-        storage
-            .get_singleton_value(&key)
-            .map_singleton_value(|v| D::from_value_arc(v))
+    pub fn get_arc<D: schema::ArcSingleton>(&self, owner: Owner) -> Option<Arc<D::Value>> {
+        <&Self as SingletonOps<'_, TableStorage>>::get_arc::<D>(self, owner)
     }
 
     /// Get immutable access to a value in the store by reference.
@@ -87,14 +112,10 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
     pub fn with<D: schema::Singleton, T>(
         &self,
-        _owner: Owner,
+        owner: Owner,
         f: impl FnOnce(&D::Value) -> T,
     ) -> Option<T> {
-        let storage = self.storage.read().unwrap();
-        let key = TypeId::of::<D>();
-        storage
-            .get_singleton_value(&key)
-            .map_singleton_value(|v| f(D::from_value_ref(v)))
+        <&Self as SingletonOps<'_, TableStorage>>::with::<D, T>(self, f, owner)
     }
 
     /// Insert a single value into the store.
@@ -106,13 +127,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         owner: Owner,
         value: D::ArgValue,
     ) -> Option<D::ArgValue> {
-        let mut storage = self.storage.write().unwrap();
-        let key = TypeId::of::<D>();
-        assert_owner(owner, &key, &storage);
-        storage
-            .singletons
-            .insert(key, (owner, D::to_value(value)))
-            .map_singleton_value(|v| D::from_value(v))
+        <&Self as SingletonOpsMut<'_, '_, TableStorage>>::insert::<D>(self, value, owner)
     }
 
     /// Get mutable access to a value in the store.
@@ -123,25 +138,14 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
         owner: Owner,
         f: impl FnOnce(&mut D::Value) -> T,
     ) -> Option<T> {
-        let mut storage = self.storage.write().unwrap();
-        let key = TypeId::of::<D>();
-        assert_owner(owner, &key, &storage);
-        storage
-            .get_singleton_value_mut(&key)
-            .map_singleton_value(|v| f(D::from_value_mut(v)))
+        <&Self as SingletonOpsMut<'_, '_, TableStorage>>::mutate::<D, T>(self, f, owner)
     }
 
     /// Remove a single value from the store.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn remove<D: schema::Singleton>(&self, owner: Owner) -> Option<D::ArgValue> {
-        let mut storage = self.storage.write().unwrap();
-        let key = TypeId::of::<D>();
-        assert_owner(owner, &key, &storage);
-        storage
-            .singletons
-            .remove(&key)
-            .map_singleton_value(|v| D::from_value(v))
+        <&Self as SingletonOpsMut<'_, '_, TableStorage>>::remove::<D>(self, owner)
     }
 
     /// Remove a single value from the store while preserving ownership of the key/value.
@@ -150,13 +154,7 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
     pub fn clear<D: schema::Singleton>(&self, owner: Owner) -> Option<D::ArgValue> {
-        let mut storage = self.storage.write().unwrap();
-        let key = TypeId::of::<D>();
-        assert_owner(owner, &key, &storage);
-        storage
-            .singletons
-            .insert(key, (owner, SinValue::None))
-            .map_singleton_value(|v| D::from_value(v))
+        <&Self as SingletonOpsMut<'_, '_, TableStorage>>::clear::<D>(self, owner)
     }
 }
 
@@ -184,112 +182,78 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     ///
     /// Returns an error (containing the current owner of the table) if the table has already been
     /// initialized. In this case, the table will be in a consistent state and can be used as normal.
-    pub fn init(&self) -> Result<()> {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.try_set_owner(self.owner)
+    pub fn init(&'a self) -> Result<()> {
+        <&Self as TabularOpsMut<'_, TableStorage, D>>::init(self, self.owner)
     }
 
     /// The number of key/value pairs in the table.
-    pub fn len(&self) -> usize {
-        let storage = self.store.storage.read().unwrap();
-        let table = D::get_table(&storage.tables);
-        table.data.len()
+    pub fn len(&'a self) -> usize {
+        <&Self as TabularOps<'_, TableStorage, D>>::len(self)
     }
 
     /// True if the table is empty.
-    pub fn is_empty(&self) -> bool {
-        let storage = self.store.storage.read().unwrap();
-        let table = D::get_table(&storage.tables);
-        table.data.is_empty()
+    pub fn is_empty(&'a self) -> bool {
+        <&Self as TabularOps<'_, TableStorage, D>>::is_empty(self)
     }
 
     /// Clear a table by removing all its KVs, but preserve ownership.
-    pub fn clear(&self) {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.assert_or_set_owner(self.owner);
-        table.indexes.clear();
-        table.data.clear();
+    pub fn clear(&'a self) {
+        <&Self as TabularOpsMut<'_, TableStorage, D>>::clear(self, self.owner)
     }
 
     /// Get a row of the table from the store by cloning the value.
     ///
     /// Returns `None` if there is no value for the specified key.
-    pub fn get<Q>(&self, key: &Q) -> Option<D::Value>
+    pub fn get<Q>(&'a self, key: &Q) -> Option<D::Value>
     where
         D::Value: Clone,
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = self.store.storage.read().unwrap();
-        let table = D::get_table(&storage.tables);
-        table.data.get(key).cloned()
+        <&Self as TabularOps<'_, TableStorage, D>>::get(self, key, self.owner)
     }
 
     /// Get immutable access to a row of the table in the store by reference.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn with<Q, T>(&self, key: &Q, f: impl FnOnce(&D::Value) -> T) -> Option<T>
+    pub fn with<Q, T>(&'a self, key: &Q, f: impl FnOnce(&D::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = self.store.storage.read().unwrap();
-        let table = D::get_table(&storage.tables);
-        let value = table.data.get(key)?;
-
-        Some(f(value))
+        <&Self as TabularOps<'_, TableStorage, D>>::with(self, key, f, self.owner)
     }
 
     /// Insert a value into the table.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
-    pub fn insert(&self, key: D::Key, value: D::Value) -> Option<D::Value>
+    pub fn insert(&'a self, key: D::Key, value: D::Value) -> Option<D::Value>
     where
         D::Key: Clone,
     {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.assert_or_set_owner(self.owner);
-        table.indexes.on_insert(&key, &value);
-        table.data.insert(key, value)
+        <&Self as TabularOpsMut<'_, TableStorage, D>>::insert(self, key, value, self.owner)
     }
 
     /// Get mutable access to a row of the table in the store in the store.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn mutate<Q, T>(&self, key: &Q, f: impl FnOnce(&mut D::Value) -> T) -> Option<T>
+    pub fn mutate<Q, T>(&'a self, key: &Q, f: impl FnOnce(&mut D::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq + ToOwned<Owned = D::Key>,
     {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.assert_owner(self.owner);
-        let value = table.data.get_mut(key)?;
-
-        table.indexes.on_remove(value);
-        let result = f(value);
-        table.indexes.on_insert(key, value);
-
-        Some(result)
+        <&Self as TabularOpsMut<'_, TableStorage, D>>::mutate(self, key, f, self.owner)
     }
 
     /// Remove a row from the table.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
-    pub fn remove<Q>(&self, key: &Q) -> Option<D::Value>
+    pub fn remove<Q>(&'a self, key: &Q) -> Option<D::Value>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.assert_owner(self.owner);
-        let value = table.data.remove(key.borrow())?;
-        table.indexes.on_remove(&value);
-        Some(value)
+        <&Self as TabularOpsMut<'_, TableStorage, D>>::remove(self, key, self.owner)
     }
 
     /// Iterate all the key/value pairs in a table.
@@ -301,10 +265,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
         D::Key: Clone,
         D::Value: Clone,
     {
-        let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::KeysAndValues>::new(
-            guard,
-        )
+        <&Self as TabularOps<'_, TableStorage, D>>::iter_cloned(self, self.owner)
     }
 
     /// Iterate all the keys in a table.
@@ -315,8 +276,7 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     where
         D::Key: Clone,
     {
-        let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Keys>::new(guard)
+        <&Self as TabularOps<'_, TableStorage, D>>::iter_keys_cloned(self, self.owner)
     }
 
     /// Iterate all the values in a table.
@@ -327,34 +287,20 @@ impl<'a, TableStorage: schema::GeneratedStorage, D: schema::TableDesc<Storage = 
     where
         D::Value: Clone,
     {
-        let guard = self.store.storage.read().unwrap();
-        TableIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, iter::Values>::new(guard)
+        <&Self as TabularOps<'_, TableStorage, D>>::iter_values_cloned(self, self.owner)
     }
 
     /// Iterate all the key/value pairs in a table.
     ///
     /// We're not able to make this an iterator because we have to ensure that the references do
     /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
-    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &D::Value)) {
-        let storage = self.store.storage.read().unwrap();
-        let table = D::get_table(&storage.tables);
-        for (k, v) in &table.data {
-            f(k, v);
-        }
+    pub fn for_each(&'a self, f: impl FnMut(&D::Key, &D::Value)) {
+        <&Self as TabularOps<'_, TableStorage, D>>::for_each(self, f, self.owner)
     }
 
     /// Iterate all the key/value pairs in a table. Values are mutable.
-    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut D::Value)) {
-        let mut storage = self.store.storage.write().unwrap();
-        let table = D::get_table_mut(&mut storage.tables);
-        table.assert_owner(self.owner);
-
-        for (k, v) in &mut table.data {
-            f(k, v);
-        }
-
-        table.indexes.clear();
-        table.indexes.build(table.data.iter());
+    pub fn for_each_mut(&'a self, f: impl FnMut(&D::Key, &mut D::Value)) {
+        <&Self as TabularOpsMut<'_, TableStorage, D>>::for_each_mut(self, f, self.owner)
     }
 }
 

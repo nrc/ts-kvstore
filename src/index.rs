@@ -1,9 +1,11 @@
 use crate::{
-    KvStore, Owner, Result, RoTransaction, Transaction,
-    iter::{self, IndexIterator, RefReadGuard, RefWriteGuard},
-    schema::{self, IndexDesc, IndexStorage, TableDesc},
+    KvStore, Owner, RefReadGuard, RefWriteGuard, RefWriteGuardMut, Result, RoTransaction,
+    Transaction,
+    operations::{IndexedOps, IndexedOpsMut, Ops, OpsMut},
+    schema::{self, IndexDesc, TableDesc},
+    storage::Storage,
 };
-use std::{borrow::Borrow, hash::Hash, marker::PhantomData, sync::RwLockReadGuard};
+use std::{borrow::Borrow, hash::Hash, marker::PhantomData};
 
 /// An abstraction for operating on a table of key/values pairs via an index.
 ///
@@ -29,6 +31,52 @@ pub struct KvTableIndex<
 
 impl<
     'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key>,
+    B: TableDesc<Storage = TableStorage>,
+> Ops<'a, TableStorage> for &'a KvTableIndex<'a, TableStorage, D, B>
+{
+    type ReadLock = std::sync::RwLockReadGuard<'a, crate::storage::Storage<TableStorage>>;
+
+    fn read_lock(self) -> Self::ReadLock {
+        self.store.storage.read().unwrap()
+    }
+}
+
+impl<
+    'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key>,
+    B: TableDesc<Storage = TableStorage>,
+> OpsMut<'a, TableStorage> for &'a KvTableIndex<'a, TableStorage, D, B>
+{
+    type WriteLock = std::sync::RwLockWriteGuard<'a, crate::storage::Storage<TableStorage>>;
+
+    fn write_lock(self) -> Self::WriteLock {
+        self.store.storage.write().unwrap()
+    }
+}
+
+impl<
+    'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key>,
+    B: TableDesc<Storage = TableStorage>,
+> IndexedOps<'a, TableStorage, D, B> for &'a KvTableIndex<'a, TableStorage, D, B>
+{
+}
+
+impl<
+    'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key>,
+    B: TableDesc<Storage = TableStorage>,
+> IndexedOpsMut<'a, TableStorage, D, B> for &'a KvTableIndex<'a, TableStorage, D, B>
+{
+}
+
+impl<
+    'a,
     TableStorage: schema::GeneratedStorage,
     D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key>,
     B: TableDesc<Storage = TableStorage>,
@@ -41,125 +89,79 @@ impl<
     ///
     /// Returns an error (containing the current owner of the table) if the table has already been
     /// initialized. In this case, the table will be in a consistent state and can be used as normal.
-    pub fn init(&self) -> Result<()> {
-        let mut storage = self.store.storage.write().unwrap();
-        let base = D::BaseTable::get_table_mut(&mut storage.tables);
-        base.try_set_owner(self.owner)
+    pub fn init(&'a self) -> Result<()> {
+        <&Self as IndexedOpsMut<'_, TableStorage, D, B>>::init(self, self.owner)
     }
 
     /// The number of key/value pairs in the base table.
-    pub fn len(&self) -> usize {
-        let storage = self.store.storage.read().unwrap();
-        let base = B::get_table(&storage.tables);
-        base.data.len()
+    pub fn len(&'a self) -> usize {
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::len(self)
     }
 
     /// True if the table is empty.
-    pub fn is_empty(&self) -> bool {
-        let storage = self.store.storage.read().unwrap();
-        let base = B::get_table(&storage.tables);
-        base.data.is_empty()
+    pub fn is_empty(&'a self) -> bool {
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::is_empty(self)
     }
 
     /// Clear the base table by removing all its KVs, but preserving ownership.
-    pub fn clear(&self) {
-        let mut storage = self.store.storage.write().unwrap();
-        let base: &mut crate::storage::Table<B, <B as TableDesc>::Indexes> =
-            B::get_table_mut(&mut storage.tables);
-        base.assert_or_set_owner(self.owner);
-        base.indexes.clear();
-        base.data.clear();
+    pub fn clear(&'a self) {
+        <&Self as IndexedOpsMut<'_, TableStorage, D, B>>::clear(self, self.owner)
     }
 
     /// Get a row of the table from the store by cloning the value.
     ///
     /// Returns `None` if there is no value for the specified key.
-    pub fn get<Q>(&self, key: &Q) -> Option<B::Value>
+    pub fn get<Q>(&'a self, key: &Q) -> Option<B::Value>
     where
         B::Value: Clone,
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = self.store.storage.read().unwrap();
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        let base_key = index.data.get(key)?;
-        base.data.get(base_key).cloned()
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::get(self, key, self.owner)
     }
 
     /// Get immutable access to a row of the table in the store by reference.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn with<Q, T>(&self, key: &Q, f: impl FnOnce(&B::Value) -> T) -> Option<T>
+    pub fn with<Q, T>(&'a self, key: &Q, f: impl FnOnce(&B::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = self.store.storage.read().unwrap();
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        let base_key = index.data.get(key)?;
-        let value = base.data.get(base_key)?;
-
-        Some(f(value))
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::with::<Q, T>(self, key, f, self.owner)
     }
 
     /// Insert a value into the table using the base table's key.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
-    pub fn insert(&self, key: B::Key, value: B::Value) -> Option<B::Value>
+    pub fn insert(&'a self, key: B::Key, value: B::Value) -> Option<B::Value>
     where
         B::Key: Clone,
     {
-        let mut storage = self.store.storage.write().unwrap();
-        let base = B::get_table_mut(&mut storage.tables);
-        base.assert_or_set_owner(self.owner);
-        base.indexes.on_remove(&value);
-        base.indexes.on_insert(&key, &value);
-        base.data.insert(key, value)
+        <&Self as IndexedOpsMut<'_, TableStorage, D, B>>::insert(self, key, value, self.owner)
     }
 
     /// Get mutable access to a row of the table in the store in the store.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn mutate<Q, T>(&self, key: &Q, f: impl FnOnce(&mut B::Value) -> T) -> Option<T>
+    pub fn mutate<Q, T>(&'a self, key: &Q, f: impl FnOnce(&mut B::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
         B::Key: Clone,
     {
-        let mut storage = self.store.storage.write().unwrap();
-        let index = D::get_table(&storage.tables);
-        let base_key: *const <B as TableDesc>::Key = index.data.get(key)? as *const _;
-        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
-        // different `Table` objects. `base_key` is a pointer into `index` and cannot be a pointer
-        // into `base`.
-        let base_key = unsafe { base_key.as_ref_unchecked() };
-        let base = B::get_table_mut(&mut storage.tables);
-        let value = base.data.get_mut(base_key)?;
-        // TODO we could be more efficient and only update indexes if the foreign key changes
-        base.indexes.on_remove(value);
-        let result = f(value);
-        base.indexes.on_insert(base_key, value);
-
-        Some(result)
+        <&Self as IndexedOpsMut<'_, TableStorage, D, B>>::mutate(self, key, f, self.owner)
     }
 
     /// Remove a row from the table.
     ///
     /// Returns the previous value if there is one, or `None` if there is no value for the specified key.
-    pub fn remove<Q>(&self, key: &Q) -> Option<B::Value>
+    pub fn remove<Q>(&'a self, key: &Q) -> Option<B::Value>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let mut storage = self.store.storage.write().unwrap();
-        let index = D::get_table_mut(&mut storage.tables);
-        let base_key = index.data.remove(key)?;
-        let base = B::get_table_mut(&mut storage.tables);
-        let value = base.data.remove(base_key.borrow())?;
-        base.indexes.on_remove(&value);
-        Some(value)
+        <&Self as IndexedOpsMut<'_, TableStorage, D, B>>::remove(self, key, self.owner)
     }
 
     /// Iterate all the keys in the index and value in the base table.
@@ -171,10 +173,7 @@ impl<
         D::Key: Clone,
         B::Value: Clone,
     {
-        let guard = self.store.storage.read().unwrap();
-        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B, iter::KeysAndValues>::new(
-            guard,
-        )
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_cloned(self, self.owner)
     }
 
     /// Iterate all the keys in the index.
@@ -185,8 +184,7 @@ impl<
     where
         D::Key: Clone,
     {
-        let guard = self.store.storage.read().unwrap();
-        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B, iter::Keys>::new(guard)
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_keys_cloned(self, self.owner)
     }
 
     /// Iterate all the values in the base table.
@@ -197,47 +195,20 @@ impl<
     where
         B::Value: Clone,
     {
-        let guard = self.store.storage.read().unwrap();
-        IndexIterator::<'a, RwLockReadGuard<'a, _>, TableStorage, D, B, iter::Values>::new(guard)
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_values_cloned(self, self.owner)
     }
 
     /// Iterate all the keys in the index and value in the base table.
     ///
     /// We're not able to make this an iterator because we have to ensure that the references do
     /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
-    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &B::Value)) {
-        let storage = self.store.storage.read().unwrap();
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        for (k, base_key) in &index.data {
-            let Some(v) = base.data.get(base_key) else {
-                continue;
-            };
-            f(k, v);
-        }
+    pub fn for_each(&'a self, f: impl FnMut(&D::Key, &B::Value)) {
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::for_each(self, f, self.owner)
     }
 
     /// Iterate all the key/value pairs in a table. Values are mutable.
-    pub fn for_each_mut(&self, mut f: impl FnMut(&D::Key, &mut B::Value)) {
-        let mut storage = self.store.storage.write().unwrap();
-        let tables: *mut _ = &mut storage.tables;
-        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
-        // different `Table` objects. Although the compiler treats `base` and `index` as having
-        // a reference to `storage.tables`, they do not, so the references here are transient and
-        // all mutable references are unique.
-        let base = B::get_table_mut(unsafe { tables.as_mut_unchecked() });
-        let index = D::get_table(&storage.tables);
-
-        for (k, base_key) in &index.data {
-            let Some(v) = base.data.get_mut(base_key) else {
-                continue;
-            };
-            f(k, v);
-        }
-
-        // TODO we could be more efficient and only update indexes if the foreign key changes
-        base.indexes.clear();
-        base.indexes.build(base.data.iter());
+    pub fn for_each_mut(&'a self, f: impl FnMut(&D::Key, &mut B::Value)) {
+        <&Self as IndexedOpsMut<'_, TableStorage, D, B>>::for_each_mut(self, f, self.owner)
     }
 }
 
@@ -263,9 +234,64 @@ pub struct KvTableTransactionalIndex<
 impl<
     'a,
     't,
-    TableStorage: schema::GeneratedStorage,
-    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key>,
-    B: TableDesc<Storage = TableStorage>,
+    's,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage> + 'a,
+> Ops<'a, TableStorage> for &'s KvTableTransactionalIndex<'a, 't, TableStorage, D, B>
+{
+    type ReadLock = RefWriteGuard<'s, 'a, Storage<TableStorage>>;
+
+    fn read_lock(self) -> Self::ReadLock {
+        RefWriteGuard(&self.txn.guard)
+    }
+}
+
+impl<
+    'a,
+    't,
+    's,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage> + 'a,
+> OpsMut<'a, TableStorage> for &'s mut KvTableTransactionalIndex<'a, 't, TableStorage, D, B>
+{
+    type WriteLock = RefWriteGuardMut<'s, 'a, Storage<TableStorage>>;
+
+    fn write_lock(self) -> Self::WriteLock {
+        RefWriteGuardMut(&mut self.txn.guard)
+    }
+}
+
+impl<
+    'a,
+    't,
+    's,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage> + 'a,
+> IndexedOps<'a, TableStorage, D, B> for &'s KvTableTransactionalIndex<'a, 't, TableStorage, D, B>
+{
+}
+
+impl<
+    'a,
+    't,
+    's,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage> + 'a,
+> IndexedOpsMut<'a, TableStorage, D, B>
+    for &'s mut KvTableTransactionalIndex<'a, 't, TableStorage, D, B>
+{
+}
+
+impl<
+    'a,
+    't,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage> + 'a,
 > KvTableTransactionalIndex<'a, 't, TableStorage, D, B>
 {
     /// Initialize the base table by setting its owner (indexes don't have an owner).
@@ -276,33 +302,22 @@ impl<
     /// Returns an error (containing the current owner of the table) if the table has already been
     /// initialized. In this case, the table will be in a consistent state and can be used as normal.
     pub fn init(&mut self) -> Result<()> {
-        let storage = &mut self.txn.guard;
-        let base = D::BaseTable::get_table_mut(&mut storage.tables);
-        base.try_set_owner(self.txn.owner)
+        <&mut Self as IndexedOpsMut<'_, TableStorage, D, B>>::init(self, self.txn.owner)
     }
 
     /// The number of key/value pairs in the base table.
     pub fn len(&self) -> usize {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        base.data.len()
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::len(self)
     }
 
     /// True if the table is empty.
     pub fn is_empty(&self) -> bool {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        base.data.is_empty()
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::is_empty(self)
     }
 
     /// Clear the base table by removing all its KVs, but preserving ownership.
     pub fn clear(&mut self) {
-        let storage = &mut self.txn.guard;
-        let base: &mut crate::storage::Table<B, <B as TableDesc>::Indexes> =
-            B::get_table_mut(&mut storage.tables);
-        base.assert_or_set_owner(self.txn.owner);
-        base.indexes.clear();
-        base.data.clear();
+        <&mut Self as IndexedOpsMut<'_, TableStorage, D, B>>::clear(self, self.txn.owner)
     }
 
     /// Get a row of the table from the store by cloning the value.
@@ -314,28 +329,18 @@ impl<
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        let base_key = index.data.get(key)?;
-        base.data.get(base_key).cloned()
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::get::<Q>(self, key, self.txn.owner)
     }
 
     /// Get immutable access to a row of the table in the store by reference.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn with<Q, T>(&self, key: &Q, f: impl FnOnce(&B::Value) -> T) -> Option<T>
+    pub fn with<Q, T>(&'t self, key: &Q, f: impl FnOnce(&B::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        let base_key = index.data.get(key)?;
-        let value = base.data.get(base_key)?;
-
-        Some(f(value))
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::with::<Q, T>(self, key, f, self.txn.owner)
     }
 
     /// Insert a value into the table using the base table's key.
@@ -345,12 +350,12 @@ impl<
     where
         B::Key: Clone,
     {
-        let storage = &mut self.txn.guard;
-        let base = B::get_table_mut(&mut storage.tables);
-        base.assert_or_set_owner(self.txn.owner);
-        base.indexes.on_remove(&value);
-        base.indexes.on_insert(&key, &value);
-        base.data.insert(key, value)
+        <&mut Self as IndexedOpsMut<'_, TableStorage, D, B>>::insert(
+            self,
+            key,
+            value,
+            self.txn.owner,
+        )
     }
 
     /// Get mutable access to a row of the table in the store in the store.
@@ -362,21 +367,12 @@ impl<
         Q: ?Sized + Hash + Eq,
         B::Key: Clone,
     {
-        let storage = &mut self.txn.guard;
-        let index = D::get_table(&storage.tables);
-        let base_key: *const <B as TableDesc>::Key = index.data.get(key)? as *const _;
-        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
-        // different `Table` objects. `base_key` is a pointer into `index` and cannot be a pointer
-        // into `base`.
-        let base_key = unsafe { base_key.as_ref_unchecked() };
-        let base = B::get_table_mut(&mut storage.tables);
-        let value = base.data.get_mut(base_key)?;
-        // TODO we could be more efficient and only update indexes if the foreign key changes
-        base.indexes.on_remove(value);
-        let result = f(value);
-        base.indexes.on_insert(base_key, value);
-
-        Some(result)
+        <&mut Self as IndexedOpsMut<'_, TableStorage, D, B>>::mutate::<Q, T>(
+            self,
+            key,
+            f,
+            self.txn.owner,
+        )
     }
 
     /// Remove a row from the table.
@@ -387,96 +383,54 @@ impl<
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = &mut self.txn.guard;
-        let index = D::get_table_mut(&mut storage.tables);
-        let base_key = index.data.remove(key)?;
-        let base = B::get_table_mut(&mut storage.tables);
-        let value = base.data.remove(base_key.borrow())?;
-        base.indexes.on_remove(&value);
-        Some(value)
+        <&mut Self as IndexedOpsMut<'_, TableStorage, D, B>>::remove::<Q>(self, key, self.txn.owner)
     }
 
     /// Iterate all the keys in the index and value in the base table.
     ///
     /// Clones both keys and values (but not the intermediate keys) and provides them by-value. To
     /// iterate without cloning, see [`Self::for_each`].
-    pub fn iter_cloned<'s>(&'s self) -> impl Iterator<Item = (D::Key, B::Value)>
+    pub fn iter_cloned(&self) -> impl Iterator<Item = (D::Key, B::Value)>
     where
         D::Key: Clone,
         B::Value: Clone,
     {
-        let guard = &self.txn.guard;
-        IndexIterator::<'s, RefWriteGuard<'s, 'a, _>, TableStorage, D, B, iter::KeysAndValues>::new(
-            RefWriteGuard(guard),
-        )
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_cloned(self, self.txn.owner)
     }
 
     /// Iterate all the keys in the index.
     ///
     /// Clones the keys and provides them by-value. To iterate without cloning, see
     /// [`Self::for_each`].
-    pub fn iter_keys_cloned<'s>(&'s self) -> impl Iterator<Item = D::Key>
+    pub fn iter_keys_cloned(&self) -> impl Iterator<Item = D::Key>
     where
         D::Key: Clone,
     {
-        let guard = &self.txn.guard;
-        IndexIterator::<'s, RefWriteGuard<'s, 'a, _>, TableStorage, D, B, iter::Keys>::new(
-            RefWriteGuard(guard),
-        )
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_keys_cloned(self, self.txn.owner)
     }
 
     /// Iterate all the values in the base table.
     ///
     /// Clones values and provides them by-value. To iterate without cloning, see
     /// [`Self::for_each`].
-    pub fn iter_values_cloned<'s>(&'s self) -> impl Iterator<Item = B::Value>
+    pub fn iter_values_cloned(&self) -> impl Iterator<Item = B::Value>
     where
         B::Value: Clone,
     {
-        let guard = &self.txn.guard;
-        IndexIterator::<'s, RefWriteGuard<'s, 'a, _>, TableStorage, D, B, iter::Values>::new(
-            RefWriteGuard(guard),
-        )
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_values_cloned(self, self.txn.owner)
     }
 
     /// Iterate all the keys in the index and value in the base table.
     ///
     /// We're not able to make this an iterator because we have to ensure that the references do
     /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
-    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &B::Value)) {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        for (k, base_key) in &index.data {
-            let Some(v) = base.data.get(base_key) else {
-                continue;
-            };
-            f(k, v);
-        }
+    pub fn for_each(&'a self, f: impl FnMut(&D::Key, &B::Value)) {
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::for_each(self, f, self.txn.owner)
     }
 
     /// Iterate all the key/value pairs in a table. Values are mutable.
-    pub fn for_each_mut(&mut self, mut f: impl FnMut(&D::Key, &mut B::Value)) {
-        let storage = &mut self.txn.guard;
-        let tables: *mut _ = &mut storage.tables;
-        // SAFETY: `B` and `D` are different tables, so `get_table[_mut]` will return pointers to
-        // different `Table` objects. Although the compiler treats `base` and `index` as having
-        // a reference to `storage.tables`, they do not, so the references here are transient and
-        // all mutable references are unique.
-        let base = B::get_table_mut(unsafe { tables.as_mut_unchecked() });
-        let index = D::get_table(&storage.tables);
-        base.assert_owner(self.txn.owner);
-
-        for (k, base_key) in &index.data {
-            let Some(v) = base.data.get_mut(base_key) else {
-                continue;
-            };
-            f(k, v);
-        }
-
-        // TODO we could be more efficient and only update indexes if the foreign key changes
-        base.indexes.clear();
-        base.indexes.build(base.data.iter());
+    pub fn for_each_mut(&mut self, f: impl FnMut(&D::Key, &mut B::Value)) {
+        <&mut Self as IndexedOpsMut<'_, TableStorage, D, B>>::for_each_mut(self, f, self.txn.owner)
     }
 }
 
@@ -500,56 +454,65 @@ pub struct KvTableRoTransactionalIndex<
 
 impl<
     'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage> + 'a,
+> Ops<'a, TableStorage> for &'a KvTableRoTransactionalIndex<'a, TableStorage, D, B>
+{
+    type ReadLock = RefReadGuard<'a, Storage<TableStorage>>;
+
+    fn read_lock(self) -> Self::ReadLock {
+        RefReadGuard(&self.txn.guard)
+    }
+}
+
+impl<
+    'a,
+    TableStorage: schema::GeneratedStorage + 'a,
+    D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key> + 'a,
+    B: TableDesc<Storage = TableStorage> + 'a,
+> IndexedOps<'a, TableStorage, D, B> for &'a KvTableRoTransactionalIndex<'a, TableStorage, D, B>
+{
+}
+
+impl<
+    'a,
     TableStorage: schema::GeneratedStorage,
     D: IndexDesc<Storage = TableStorage, BaseTable = B, Value = B::Key>,
     B: TableDesc<Storage = TableStorage>,
 > KvTableRoTransactionalIndex<'a, TableStorage, D, B>
 {
     /// The number of key/value pairs in the base table.
-    pub fn len(&self) -> usize {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        base.data.len()
+    pub fn len(&'a self) -> usize {
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::len(self)
     }
 
     /// True if the table is empty.
-    pub fn is_empty(&self) -> bool {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        base.data.is_empty()
+    pub fn is_empty(&'a self) -> bool {
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::is_empty(self)
     }
 
     /// Get a row of the table from the store by cloning the value.
     ///
     /// Returns `None` if there is no value for the specified key.
-    pub fn get<Q>(&self, key: &Q) -> Option<B::Value>
+    pub fn get<Q>(&'a self, key: &Q) -> Option<B::Value>
     where
         B::Value: Clone,
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        let base_key = index.data.get(key)?;
-        base.data.get(base_key).cloned()
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::get::<Q>(self, key, self.txn.owner)
     }
 
     /// Get immutable access to a row of the table in the store by reference.
     ///
     /// Returns `None` (and does not call `f`) if there is no value for the specified key.
-    pub fn with<Q, T>(&self, key: &Q, f: impl FnOnce(&B::Value) -> T) -> Option<T>
+    pub fn with<Q, T>(&'a self, key: &Q, f: impl FnOnce(&B::Value) -> T) -> Option<T>
     where
         D::Key: Borrow<Q>,
         Q: ?Sized + Hash + Eq,
     {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        let base_key = index.data.get(key)?;
-        let value = base.data.get(base_key)?;
-
-        Some(f(value))
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::with::<Q, T>(self, key, f, self.txn.owner)
     }
 
     /// Iterate all the keys in the index and value in the base table.
@@ -561,10 +524,7 @@ impl<
         D::Key: Clone,
         B::Value: Clone,
     {
-        let guard = &self.txn.guard;
-        IndexIterator::<'a, RefReadGuard<'a, _>, TableStorage, D, B, iter::KeysAndValues>::new(
-            RefReadGuard(guard),
-        )
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_cloned(self, self.txn.owner)
     }
 
     /// Iterate all the keys in the index.
@@ -575,10 +535,7 @@ impl<
     where
         D::Key: Clone,
     {
-        let guard = &self.txn.guard;
-        IndexIterator::<'a, RefReadGuard<'a, _>, TableStorage, D, B, iter::Keys>::new(RefReadGuard(
-            guard,
-        ))
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_keys_cloned(self, self.txn.owner)
     }
 
     /// Iterate all the values in the base table.
@@ -589,26 +546,15 @@ impl<
     where
         B::Value: Clone,
     {
-        let guard = &self.txn.guard;
-        IndexIterator::<'a, RefReadGuard<'a, _>, TableStorage, D, B, iter::Values>::new(
-            RefReadGuard(guard),
-        )
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::iter_values_cloned(self, self.txn.owner)
     }
 
     /// Iterate all the keys in the index and value in the base table.
     ///
     /// We're not able to make this an iterator because we have to ensure that the references do
     /// not outlive our lock on the store. For a (cloning) iterator see [`Self::iter_cloned`].
-    pub fn for_each(&self, mut f: impl FnMut(&D::Key, &B::Value)) {
-        let storage = &self.txn.guard;
-        let base = B::get_table(&storage.tables);
-        let index = D::get_table(&storage.tables);
-        for (k, base_key) in &index.data {
-            let Some(v) = base.data.get(base_key) else {
-                continue;
-            };
-            f(k, v);
-        }
+    pub fn for_each(&'a self, f: impl FnMut(&D::Key, &B::Value)) {
+        <&Self as IndexedOps<'_, TableStorage, D, B>>::for_each(self, f, self.txn.owner)
     }
 }
 

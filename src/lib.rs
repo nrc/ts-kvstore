@@ -103,11 +103,22 @@
 //! Where the `TypeId` id the id of the type used to describe the singleton. Values can be
 //! stored in different ways (inline, via an `Arc`, etc.) each of which is a variant of `SinValue`.
 //! The store transparently converts keys and values to their declared types.
+//!
+//! The implementation of the storage operations (`get`, `insert`, etc.) is somewhat shared between
+//! the various types which support them (`KvStore`, the table types, the transaction types, index
+//! types, and transactional index types). These are implemented on traits in the `operations` module.
+//! For ease of use and documentation, the functions are implemented on each concrete type and
+//! delegated to the trait implementations meaning that the traits and impls are an internal
+//! implementation detail.
 
-use std::sync::RwLock;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 
 mod index;
 mod iter;
+mod operations;
 mod raw;
 pub mod schema;
 mod singleton;
@@ -139,6 +150,26 @@ impl<TableStorage: schema::GeneratedStorage> KvStore<TableStorage> {
     }
 }
 
+impl<'a, TableStorage: schema::GeneratedStorage + 'a> operations::Ops<'a, TableStorage>
+    for &'a crate::KvStore<TableStorage>
+{
+    type ReadLock = std::sync::RwLockReadGuard<'a, storage::Storage<TableStorage>>;
+
+    fn read_lock(self) -> Self::ReadLock {
+        self.storage.read().unwrap()
+    }
+}
+
+impl<'a, TableStorage: schema::GeneratedStorage + 'a> operations::OpsMut<'a, TableStorage>
+    for &'a crate::KvStore<TableStorage>
+{
+    type WriteLock = std::sync::RwLockWriteGuard<'a, storage::Storage<TableStorage>>;
+
+    fn write_lock(self) -> Self::WriteLock {
+        self.storage.write().unwrap()
+    }
+}
+
 /// A token indicating ownership of a KV singleton or table. See crate docs for what ownership means
 /// for a store.
 pub type Owner = &'static str;
@@ -153,3 +184,46 @@ pub enum Error {
 
 /// `Result` alias for a KvStore [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Helper type for using a reference to a [`RwLockWriteGuard`] as a generic argument
+/// with a `Deref` bound. Required because checking trait bounds does not take into account
+/// transitivity of `Deref`.
+struct RefWriteGuard<'r, 'a, T>(&'r RwLockWriteGuard<'a, T>);
+
+impl<'r, 'a, T> Deref for RefWriteGuard<'r, 'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+/// Helper type for using a mut reference to a [`RwLockWriteGuard`] as a generic argument
+/// with `Deref` and `DerefMut` bounds. Required because checking trait bounds does not take into
+/// account transitivity of `Deref`.
+struct RefWriteGuardMut<'r, 'a, T>(&'r mut RwLockWriteGuard<'a, T>);
+
+impl<'r, 'a, T> Deref for RefWriteGuardMut<'r, 'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+impl<'r, 'a, T> DerefMut for RefWriteGuardMut<'r, 'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.deref_mut()
+    }
+}
+/// Helper type for using a reference to a [`RwLockReadGuard`] as a generic argument
+/// with a `Deref` bound. Required because checking trait bounds does not take into account
+/// transitivity of `Deref`.
+struct RefReadGuard<'a, T>(&'a RwLockReadGuard<'a, T>);
+
+impl<'a, T> Deref for RefReadGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
